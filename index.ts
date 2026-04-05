@@ -415,4 +415,78 @@ keys
     console.log(`Revoked key ${(body as { id: string }).id}`);
   });
 
+// --- Invites ---
+const invites = program.command("invites").description("Collaborator invite management");
+
+invites
+  .command("list")
+  .description("List invites sent from your org")
+  .action(async () => {
+    const { body } = await api("/api/invites");
+    const { invites: list } = body as { invites: { id: string; email: string; role: string; createdAt: string; expiresAt: string; acceptedAt: string | null; revokedAt: string | null }[] };
+    if (list.length === 0) { console.log("No invites."); return; }
+    for (const i of list) {
+      const status = i.revokedAt ? "revoked" : i.acceptedAt ? "accepted" : new Date(i.expiresAt) < new Date() ? "expired" : "pending";
+      console.log(`  ${i.id}  ${i.email}  ${i.role}  ${status}`);
+    }
+  });
+
+invites
+  .command("send <email>")
+  .description("Send an invite to a collaborator (prints the invite link)")
+  .option("-r, --role <role>", "Role to assign (member)", "member")
+  .action(async (email, opts) => {
+    const { body } = await api("/api/invites", {
+      method: "POST",
+      body: JSON.stringify({ email, role: opts.role }),
+    });
+    const i = body as { id: string; email: string; token: string; expiresAt: string };
+    console.log(`Invite created for ${i.email} (expires ${new Date(i.expiresAt).toLocaleDateString()})`);
+    const base = BASE_URL();
+    console.log(`\n  Invite link: ${base}/admin#/invites/accept?token=${i.token}\n`);
+    console.log("Share this link — the token is not stored in plaintext.");
+  });
+
+invites
+  .command("revoke <id>")
+  .description("Revoke a pending invite by ID")
+  .action(async (id) => {
+    const { body } = await api(`/api/invites/${id}`, { method: "DELETE" });
+    console.log(`Revoked invite ${(body as { id: string }).id}`);
+  });
+
+invites
+  .command("accept <token>")
+  .description("Accept an invite using the raw token")
+  .action(async (token) => {
+    const { body } = await api("/api/invites/accept", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    console.log(`Accepted invite. You are now a member of org ${(body as { orgId: string }).orgId}.`);
+  });
+
+// --- Members ---
+const members = program.command("members").description("Org member management");
+
+members
+  .command("list")
+  .description("List members of your org")
+  .action(async () => {
+    const { body } = await api("/api/members");
+    const { members: list } = body as { members: { userId: string; name: string; email: string; role: string; joinedAt: string }[] };
+    if (list.length === 0) { console.log("No members."); return; }
+    for (const m of list) {
+      console.log(`  ${m.userId}  ${m.email}  "${m.name}"  ${m.role}  joined ${new Date(m.joinedAt).toLocaleDateString()}`);
+    }
+  });
+
+members
+  .command("remove <userId>")
+  .description("Remove a member from your org")
+  .action(async (userId) => {
+    const { body } = await api(`/api/members/${userId}`, { method: "DELETE" });
+    console.log(`Removed member ${(body as { userId: string }).userId}`);
+  });
+
 program.parse();
