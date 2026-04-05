@@ -463,6 +463,27 @@ invites
   });
 
 invites
+  .command("received")
+  .description("List invites sent to your account")
+  .action(async () => {
+    const { body } = await api("/api/invites/received");
+    const { invites: list } = body as { invites: { id: string; orgName: string; orgEmail: string; role: string; expiresAt: string; acceptedAt: string | null; revokedAt: string | null }[] };
+    if (list.length === 0) { console.log("No received invites."); return; }
+    for (const i of list) {
+      const status = i.revokedAt ? "revoked" : i.acceptedAt ? "accepted" : new Date(i.expiresAt) < new Date() ? "expired" : "pending";
+      console.log(`  ${i.id}  from: ${i.orgName} <${i.orgEmail}>  role: ${i.role}  ${status}`);
+    }
+  });
+
+invites
+  .command("accept-by-id <inviteId>")
+  .description("Accept a received invite by ID (no token needed — uses your logged-in email)")
+  .action(async (inviteId) => {
+    const { body } = await api(`/api/invites/${inviteId}/accept`, { method: "POST" });
+    console.log(`Accepted. You are now a member of org ${(body as { orgId: string }).orgId}.`);
+  });
+
+invites
   .command("send <email>")
   .description("Send an invite to a collaborator (prints the invite link)")
   .option("-r, --role <role>", "Role to assign (member)", "member")
