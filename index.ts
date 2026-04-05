@@ -415,6 +415,37 @@ keys
     console.log(`Revoked key ${(body as { id: string }).id}`);
   });
 
+// --- Org context ---
+const org = program.command("org").description("Org context management");
+
+org
+  .command("current")
+  .description("Show the active org for the current session")
+  .action(async () => {
+    const { body } = await api("/api/org");
+    const { current, orgs } = body as { current: string; orgs: { id: string; name: string; own: boolean }[] };
+    const active = orgs.find(o => o.id === current);
+    console.log(`Active org: ${active?.name ?? current}`);
+    if (orgs.length > 1) {
+      console.log("\nAvailable orgs:");
+      for (const o of orgs) {
+        const marker = o.id === current ? "→" : " ";
+        console.log(`  ${marker} ${o.id}  ${o.name}`);
+      }
+    }
+  });
+
+org
+  .command("switch <orgId>")
+  .description("Switch the active org for the current session")
+  .action(async (orgId) => {
+    const { body } = await api("/api/org", {
+      method: "PUT",
+      body: JSON.stringify({ orgId }),
+    });
+    console.log(`Switched to org ${(body as { current: string }).current}`);
+  });
+
 // --- Invites ---
 const invites = program.command("invites").description("Collaborator invite management");
 
