@@ -446,6 +446,29 @@ org
     console.log(`Switched to org ${(body as { current: string }).current}`);
   });
 
+const orgSlug = org.command("slug").description("Org slug management");
+
+orgSlug
+  .command("get")
+  .description("Show the current org's slug")
+  .action(async () => {
+    const { body } = await api("/api/org");
+    const { current, orgs } = body as { current: string; orgs: { id: string; name: string; slug: string; own: boolean }[] };
+    const active = orgs.find(o => o.id === current);
+    console.log(active?.slug ?? "");
+  });
+
+orgSlug
+  .command("set <slug>")
+  .description("Set a custom slug for the current org")
+  .action(async (slug) => {
+    const { body } = await api("/api/org/slug", {
+      method: "PUT",
+      body: JSON.stringify({ slug }),
+    });
+    console.log(`Slug set: ${(body as { slug: string }).slug}`);
+  });
+
 // --- Invites ---
 const invites = program.command("invites").description("Collaborator invite management");
 
@@ -626,6 +649,37 @@ perms
   .action(async (id) => {
     await api(`/api/permissions/${id}`, { method: "DELETE" });
     console.log(`Permission ${id} deleted`);
+  });
+
+// --- llms.txt ---
+program
+  .command("llms")
+  .description("Fetch and print an org's llms.txt (pipe into LLM context)")
+  .option("--auth", "Use the authenticated endpoint (GET /api/orgs/{slug}/llms.txt)")
+  .option("--org <slug>", "Org slug to fetch (defaults to current org's slug)")
+  .action(async (opts) => {
+    let slug = opts.org as string | undefined;
+    if (!slug) {
+      const { body } = await api("/api/org");
+      const { current, orgs } = body as { current: string; orgs: { id: string; slug: string }[] };
+      const active = orgs.find(o => o.id === current);
+      slug = active?.slug;
+      if (!slug) { console.error("Error: could not determine current org slug"); process.exit(1); }
+    }
+
+    const path = opts.auth ? `/api/orgs/${slug}/llms.txt` : `/orgs/${slug}/llms.txt`;
+    const config = readConfig();
+    const headers: Record<string, string> = { "Origin": BASE_URL() };
+    if (opts.auth && config.cookie) headers["Cookie"] = config.cookie;
+
+    const res = await fetch(`${BASE_URL()}${path}`, { headers });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`Error: ${text || res.statusText}`);
+      process.exit(1);
+    }
+    const text = await res.text();
+    process.stdout.write(text);
   });
 
 program.parse();
