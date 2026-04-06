@@ -541,4 +541,91 @@ members
     console.log(`Removed member ${(body as { userId: string }).userId}`);
   });
 
+// --- Permissions ---
+type Permission = {
+  id: string; principal: string; resource: string; access: string;
+  labelFilter: string | null; filterLang: string | null; filterExpr: string | null;
+  auditReads: boolean; auditWrites: boolean; createdAt: string;
+};
+
+const perms = program.command("permissions").description("Access-control permission management (org owner only)");
+
+perms
+  .command("list")
+  .description("List all permission rules for the current org")
+  .action(async () => {
+    const { body } = await api("/api/permissions");
+    const { permissions: list } = body as { permissions: Permission[] };
+    if (list.length === 0) { console.log("No permissions configured."); return; }
+    for (const p of list) {
+      const filter = p.filterExpr ? ` [${p.filterLang}: ${p.filterExpr}]` : "";
+      const label  = p.labelFilter ? ` label:${p.labelFilter}` : "";
+      const audit  = [p.auditReads ? "reads" : "", p.auditWrites ? "writes" : ""].filter(Boolean).join("+");
+      const auditStr = audit ? ` audit:${audit}` : "";
+      console.log(`  ${p.id}  ${p.principal}  ${p.resource}  ${p.access}${label}${filter}${auditStr}`);
+    }
+  });
+
+perms
+  .command("create")
+  .description("Create or upsert a permission rule")
+  .requiredOption("--principal <principal>", "e.g. member:<userId> or key:<keyId>")
+  .requiredOption("--resource <resource>",   "e.g. collection:golf-magazine  tree:site  collection:*  *")
+  .requiredOption("--access <access>",       "none | read | write | admin")
+  .option("--label-filter <label>",          "Silently scope reads to this label")
+  .option("--filter-lang <lang>",            "jq | jmespath | jsonata  (requires --filter-expr)")
+  .option("--filter-expr <expr>",            "Filter expression applied to document data")
+  .option("--audit-reads",                   "Log read access to access_log", false)
+  .option("--audit-writes",                  "Log write access to access_log", false)
+  .action(async (opts) => {
+    const { body } = await api("/api/permissions", {
+      method: "POST",
+      body: JSON.stringify({
+        principal:   opts.principal,
+        resource:    opts.resource,
+        access:      opts.access,
+        labelFilter: opts.labelFilter ?? null,
+        filterLang:  opts.filterLang  ?? null,
+        filterExpr:  opts.filterExpr  ?? null,
+        auditReads:  opts.auditReads  ?? false,
+        auditWrites: opts.auditWrites ?? false,
+      }),
+    });
+    const p = body as Permission;
+    console.log(`Permission ${p.id} created: ${p.principal} → ${p.resource} [${p.access}]`);
+  });
+
+perms
+  .command("update <id>")
+  .description("Update fields on an existing permission rule")
+  .option("--access <access>",       "none | read | write | admin")
+  .option("--label-filter <label>",  "Set label filter (use --no-label-filter to clear)")
+  .option("--filter-lang <lang>",    "jq | jmespath | jsonata")
+  .option("--filter-expr <expr>",    "Filter expression")
+  .option("--audit-reads <bool>",    "true | false")
+  .option("--audit-writes <bool>",   "true | false")
+  .action(async (id, opts) => {
+    const patch: Record<string, unknown> = {};
+    if (opts.access       !== undefined) patch.access       = opts.access;
+    if (opts.labelFilter  !== undefined) patch.labelFilter  = opts.labelFilter || null;
+    if (opts.filterLang   !== undefined) patch.filterLang   = opts.filterLang  || null;
+    if (opts.filterExpr   !== undefined) patch.filterExpr   = opts.filterExpr  || null;
+    if (opts.auditReads   !== undefined) patch.auditReads   = opts.auditReads  === "true";
+    if (opts.auditWrites  !== undefined) patch.auditWrites  = opts.auditWrites === "true";
+    const { body } = await api(`/api/permissions/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    });
+    const p = body as Permission;
+    console.log(`Permission ${p.id} updated: ${p.principal} → ${p.resource} [${p.access}]`);
+  });
+
+perms
+  .command("delete <id>")
+  .description("Delete a permission rule by ID")
+  .action(async (id) => {
+    await api(`/api/permissions/${id}`, { method: "DELETE" });
+    console.log(`Permission ${id} deleted`);
+  });
+
 program.parse();
