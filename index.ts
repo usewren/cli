@@ -655,7 +655,6 @@ perms
 program
   .command("llms")
   .description("Fetch and print an org's llms.txt (pipe into LLM context)")
-  .option("--auth", "Use the authenticated endpoint (GET /api/orgs/{slug}/llms.txt)")
   .option("--org <slug>", "Org slug to fetch (defaults to current org's slug)")
   .action(async (opts) => {
     let slug = opts.org as string | undefined;
@@ -667,10 +666,10 @@ program
       if (!slug) { console.error("Error: could not determine current org slug"); process.exit(1); }
     }
 
-    const path = opts.auth ? `/api/v1/orgs/${slug}/llms.txt` : `/orgs/${slug}/llms.txt`;
+    const path = `/api/v1/orgs/${slug}/llms.txt`;
     const config = readConfig();
     const headers: Record<string, string> = { "Origin": BASE_URL() };
-    if (opts.auth && config.cookie) headers["Cookie"] = config.cookie;
+    if (config.cookie) headers["Cookie"] = config.cookie;
 
     const res = await fetch(`${BASE_URL()}${path}`, { headers });
     if (!res.ok) {
