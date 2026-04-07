@@ -231,6 +231,7 @@ schema
   .command("set <collection> [json]")
   .description("Set (or replace) the JSON Schema for a collection")
   .option("--display-name <template>", "Display name template, e.g. \"{title}\" or \"{first} {last}\"")
+  .option("--list-columns <fields>", "Comma-separated fields to show as columns in the document list, e.g. \"date,title,venue\"")
   .option("--type <type>", "Collection type: json (default) or binary")
   .action(async (collection, json, opts) => {
     const collectionType: string | undefined = opts.type;
@@ -243,6 +244,7 @@ schema
     const payload: Record<string, unknown> = {};
     if (parsed !== undefined) payload.schema = parsed;
     if (opts.displayName) payload.displayName = opts.displayName;
+    if (opts.listColumns) payload.listColumns = opts.listColumns.split(",").map((c: string) => c.trim()).filter(Boolean);
     if (collectionType) payload.collectionType = collectionType;
 
     const { body } = await api(`/api/v1/${collection}/_schema`, {
