@@ -105,7 +105,7 @@ program
   .command("collections")
   .description("List all collections")
   .action(async () => {
-    const { body } = await api("/collections");
+    const { body } = await api("/api/v1/collections");
     print(body);
   });
 
@@ -123,7 +123,7 @@ program
     if (opts.limit) params.set("limit", opts.limit);
     if (opts.cursor) params.set("cursor", opts.cursor);
     if (opts.label) params.set("label", opts.label);
-    const { body } = await api(`/${collection}?${params}`);
+    const { body } = await api(`/api/v1/${collection}?${params}`);
     print(body);
   });
 
@@ -133,7 +133,7 @@ program
   .option("--label <label>", "Return state at this label")
   .action(async (collection, id, opts) => {
     const params = opts.label ? `?label=${opts.label}` : "";
-    const { body } = await api(`/${collection}/${id}${params}`);
+    const { body } = await api(`/api/v1/${collection}/${id}${params}`);
     print(body);
   });
 
@@ -141,7 +141,7 @@ program
   .command("create <collection> <json>")
   .description("Create a document")
   .action(async (collection, json) => {
-    const { body } = await api(`/${collection}`, {
+    const { body } = await api(`/api/v1/${collection}`, {
       method: "POST",
       body: json,
     });
@@ -152,7 +152,7 @@ program
   .command("update <collection> <id> <json>")
   .description("Update a document (creates a new version)")
   .action(async (collection, id, json) => {
-    const { body } = await api(`/${collection}/${id}`, {
+    const { body } = await api(`/api/v1/${collection}/${id}`, {
       method: "PUT",
       body: json,
     });
@@ -163,7 +163,7 @@ program
   .command("delete <collection> <id>")
   .description("Delete a document")
   .action(async (collection, id) => {
-    const { body } = await api(`/${collection}/${id}`, { method: "DELETE" });
+    const { body } = await api(`/api/v1/${collection}/${id}`, { method: "DELETE" });
     print(body);
   });
 
@@ -172,7 +172,7 @@ program
   .command("paths <collection> <id>")
   .description("List all tree paths a document is assigned to")
   .action(async (collection, id) => {
-    const { body } = await api(`/${collection}/${id}/paths`);
+    const { body } = await api(`/api/v1/${collection}/${id}/paths`);
     print(body);
   });
 
@@ -180,7 +180,7 @@ program
   .command("versions <collection> <id>")
   .description("List version history of a document")
   .action(async (collection, id) => {
-    const { body } = await api(`/${collection}/${id}/versions`);
+    const { body } = await api(`/api/v1/${collection}/${id}/versions`);
     print(body);
   });
 
@@ -188,7 +188,7 @@ program
   .command("rollback <collection> <id> <version>")
   .description("Rollback a document to a previous version")
   .action(async (collection, id, version) => {
-    const { body } = await api(`/${collection}/${id}/rollback/${version}`, { method: "POST" });
+    const { body } = await api(`/api/v1/${collection}/${id}/rollback/${version}`, { method: "POST" });
     print(body);
   });
 
@@ -199,7 +199,7 @@ program
   .action(async (collection, id, label, opts) => {
     const payload: Record<string, unknown> = { label };
     if (opts.version !== undefined) payload.version = opts.version;
-    const { body } = await api(`/${collection}/${id}/labels`, {
+    const { body } = await api(`/api/v1/${collection}/${id}/labels`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
@@ -212,7 +212,7 @@ program
   .requiredOption("--v1 <v1>", "First version or label")
   .requiredOption("--v2 <v2>", "Second version or label")
   .action(async (collection, id, opts) => {
-    const { body } = await api(`/${collection}/${id}/diff?v1=${opts.v1}&v2=${opts.v2}`);
+    const { body } = await api(`/api/v1/${collection}/${id}/diff?v1=${opts.v1}&v2=${opts.v2}`);
     print(body);
   });
 
@@ -223,7 +223,7 @@ schema
   .command("get <collection>")
   .description("Get the JSON Schema for a collection")
   .action(async (collection) => {
-    const { body } = await api(`/${collection}/_schema`);
+    const { body } = await api(`/api/v1/${collection}/_schema`);
     print(body);
   });
 
@@ -245,7 +245,7 @@ schema
     if (opts.displayName) payload.displayName = opts.displayName;
     if (collectionType) payload.collectionType = collectionType;
 
-    const { body } = await api(`/${collection}/_schema`, {
+    const { body } = await api(`/api/v1/${collection}/_schema`, {
       method: "PUT",
       body: JSON.stringify(payload),
     });
@@ -256,7 +256,7 @@ schema
   .command("delete <collection>")
   .description("Remove the JSON Schema from a collection")
   .action(async (collection) => {
-    const { body } = await api(`/${collection}/_schema`, { method: "DELETE" });
+    const { body } = await api(`/api/v1/${collection}/_schema`, { method: "DELETE" });
     print(body);
   });
 
@@ -267,7 +267,7 @@ tree
   .command("list")
   .description("List all trees for this tenant")
   .action(async () => {
-    const { body } = await api("/tree");
+    const { body } = await api("/api/v1/tree");
     print(body);
   });
 
@@ -276,7 +276,7 @@ tree
   .description("Get document at path and list children in a named tree")
   .action(async (treeName, path) => {
     const p = path.startsWith("/") ? path : "/" + path;
-    const { body } = await api(`/tree/${treeName}${p}`);
+    const { body } = await api(`/api/v1/tree/${treeName}${p}`);
     print(body);
   });
 
@@ -285,7 +285,7 @@ tree
   .description("Assign a document to a tree path")
   .action(async (treeName, path, documentId) => {
     const p = path.startsWith("/") ? path : "/" + path;
-    const { body } = await api(`/tree/${treeName}${p}`, {
+    const { body } = await api(`/api/v1/tree/${treeName}${p}`, {
       method: "PUT",
       body: JSON.stringify({ documentId }),
     });
@@ -297,7 +297,7 @@ tree
   .description("Remove a document from a tree path")
   .action(async (treeName, path) => {
     const p = path.startsWith("/") ? path : "/" + path;
-    const { body } = await api(`/tree/${treeName}${p}`, {
+    const { body } = await api(`/api/v1/tree/${treeName}${p}`, {
       method: "DELETE",
     });
     print(body);
@@ -307,7 +307,7 @@ tree
   .command("view <treeName>")
   .description("Print the full tree with all paths and document summaries")
   .action(async (treeName) => {
-    const { body } = await api(`/tree/${treeName}?full=true`);
+    const { body } = await api(`/api/v1/tree/${treeName}?full=true`);
     const nodes = (body as { tree: string; nodes: { path: string; documentId: string; document: { collection: string; version: number; data: Record<string, unknown> } }[] }).nodes;
     if (nodes.length === 0) {
       console.log(`Tree "${treeName}" is empty.`);
@@ -332,7 +332,7 @@ program
     const filename = filePath.split("/").pop()!;
     const form = new FormData();
     form.append("file", new File([blob], filename, { type: fileHandle.type || "application/octet-stream" }));
-    const { body } = await apiMultipart(`/${collection}`, form, "POST");
+    const { body } = await apiMultipart(`/api/v1/${collection}`, form, "POST");
     print(body);
   });
 
@@ -347,7 +347,7 @@ program
     const filename = filePath.split("/").pop()!;
     const form = new FormData();
     form.append("file", new File([blob], filename, { type: fileHandle.type || "application/octet-stream" }));
-    const { body } = await apiMultipart(`/${collection}/${id}`, form, "PUT");
+    const { body } = await apiMultipart(`/api/v1/${collection}/${id}`, form, "PUT");
     print(body);
   });
 
@@ -361,7 +361,7 @@ program
     const headers: Record<string, string> = { "Origin": BASE_URL() };
     if (config.cookie) headers["Cookie"] = config.cookie;
     const qs = opts.version ? `?version=${opts.version}` : "";
-    const res = await fetch(`${BASE_URL()}/${collection}/${id}/raw${qs}`, { headers });
+    const res = await fetch(`${BASE_URL()}/api/v1/${collection}/${id}/raw${qs}`, { headers });
     if (!res.ok) {
       const body = await res.json() as { error?: string };
       console.error(`Error: ${body.error ?? res.statusText}`);
@@ -383,7 +383,7 @@ keys
   .command("list")
   .description("List all API keys for your account")
   .action(async () => {
-    const { body } = await api("/api/keys");
+    const { body } = await api("/api/v1/keys");
     const { keys: list } = body as { keys: { id: string; name: string; keyPrefix: string; createdAt: string; lastUsedAt: string | null; revokedAt: string | null }[] };
     if (list.length === 0) { console.log("No API keys."); return; }
     for (const k of list) {
@@ -397,7 +397,7 @@ keys
   .command("create <name>")
   .description("Create a new API key (the full key is shown once)")
   .action(async (name) => {
-    const { body } = await api("/api/keys", {
+    const { body } = await api("/api/v1/keys", {
       method: "POST",
       body: JSON.stringify({ name }),
     });
@@ -411,7 +411,7 @@ keys
   .command("revoke <id>")
   .description("Revoke an API key by ID")
   .action(async (id) => {
-    const { body } = await api(`/api/keys/${id}`, { method: "DELETE" });
+    const { body } = await api(`/api/v1/keys/${id}`, { method: "DELETE" });
     console.log(`Revoked key ${(body as { id: string }).id}`);
   });
 
@@ -422,7 +422,7 @@ org
   .command("current")
   .description("Show the active org for the current session")
   .action(async () => {
-    const { body } = await api("/api/org");
+    const { body } = await api("/api/v1/org");
     const { current, orgs } = body as { current: string; orgs: { id: string; name: string; own: boolean }[] };
     const active = orgs.find(o => o.id === current);
     console.log(`Active org: ${active?.name ?? current}`);
@@ -439,7 +439,7 @@ org
   .command("switch <orgId>")
   .description("Switch the active org for the current session")
   .action(async (orgId) => {
-    const { body } = await api("/api/org", {
+    const { body } = await api("/api/v1/org", {
       method: "PUT",
       body: JSON.stringify({ orgId }),
     });
@@ -452,7 +452,7 @@ orgSlug
   .command("get")
   .description("Show the current org's slug")
   .action(async () => {
-    const { body } = await api("/api/org");
+    const { body } = await api("/api/v1/org");
     const { current, orgs } = body as { current: string; orgs: { id: string; name: string; slug: string; own: boolean }[] };
     const active = orgs.find(o => o.id === current);
     console.log(active?.slug ?? "");
@@ -462,7 +462,7 @@ orgSlug
   .command("set <slug>")
   .description("Set a custom slug for the current org")
   .action(async (slug) => {
-    const { body } = await api("/api/org/slug", {
+    const { body } = await api("/api/v1/org/slug", {
       method: "PUT",
       body: JSON.stringify({ slug }),
     });
@@ -476,7 +476,7 @@ invites
   .command("list")
   .description("List invites sent from your org")
   .action(async () => {
-    const { body } = await api("/api/invites");
+    const { body } = await api("/api/v1/invites");
     const { invites: list } = body as { invites: { id: string; email: string; role: string; createdAt: string; expiresAt: string; acceptedAt: string | null; revokedAt: string | null }[] };
     if (list.length === 0) { console.log("No invites."); return; }
     for (const i of list) {
@@ -489,7 +489,7 @@ invites
   .command("received")
   .description("List invites sent to your account")
   .action(async () => {
-    const { body } = await api("/api/invites/received");
+    const { body } = await api("/api/v1/invites/received");
     const { invites: list } = body as { invites: { id: string; orgName: string; orgEmail: string; role: string; expiresAt: string; acceptedAt: string | null; revokedAt: string | null }[] };
     if (list.length === 0) { console.log("No received invites."); return; }
     for (const i of list) {
@@ -502,7 +502,7 @@ invites
   .command("accept-by-id <inviteId>")
   .description("Accept a received invite by ID (no token needed — uses your logged-in email)")
   .action(async (inviteId) => {
-    const { body } = await api(`/api/invites/${inviteId}/accept`, { method: "POST" });
+    const { body } = await api(`/api/v1/invites/${inviteId}/accept`, { method: "POST" });
     console.log(`Accepted. You are now a member of org ${(body as { orgId: string }).orgId}.`);
   });
 
@@ -511,7 +511,7 @@ invites
   .description("Send an invite to a collaborator (prints the invite link)")
   .option("-r, --role <role>", "Role to assign (member)", "member")
   .action(async (email, opts) => {
-    const { body } = await api("/api/invites", {
+    const { body } = await api("/api/v1/invites", {
       method: "POST",
       body: JSON.stringify({ email, role: opts.role }),
     });
@@ -526,7 +526,7 @@ invites
   .command("revoke <id>")
   .description("Revoke a pending invite by ID")
   .action(async (id) => {
-    const { body } = await api(`/api/invites/${id}`, { method: "DELETE" });
+    const { body } = await api(`/api/v1/invites/${id}`, { method: "DELETE" });
     console.log(`Revoked invite ${(body as { id: string }).id}`);
   });
 
@@ -534,7 +534,7 @@ invites
   .command("accept <token>")
   .description("Accept an invite using the raw token")
   .action(async (token) => {
-    const { body } = await api("/api/invites/accept", {
+    const { body } = await api("/api/v1/invites/accept", {
       method: "POST",
       body: JSON.stringify({ token }),
     });
@@ -548,7 +548,7 @@ members
   .command("list")
   .description("List members of your org")
   .action(async () => {
-    const { body } = await api("/api/members");
+    const { body } = await api("/api/v1/members");
     const { members: list } = body as { members: { userId: string; name: string; email: string; role: string; joinedAt: string }[] };
     if (list.length === 0) { console.log("No members."); return; }
     for (const m of list) {
@@ -560,7 +560,7 @@ members
   .command("remove <userId>")
   .description("Remove a member from your org")
   .action(async (userId) => {
-    const { body } = await api(`/api/members/${userId}`, { method: "DELETE" });
+    const { body } = await api(`/api/v1/members/${userId}`, { method: "DELETE" });
     console.log(`Removed member ${(body as { userId: string }).userId}`);
   });
 
@@ -577,7 +577,7 @@ perms
   .command("list")
   .description("List all permission rules for the current org")
   .action(async () => {
-    const { body } = await api("/api/permissions");
+    const { body } = await api("/api/v1/permissions");
     const { permissions: list } = body as { permissions: Permission[] };
     if (list.length === 0) { console.log("No permissions configured."); return; }
     for (const p of list) {
@@ -601,7 +601,7 @@ perms
   .option("--audit-reads",                   "Log read access to access_log", false)
   .option("--audit-writes",                  "Log write access to access_log", false)
   .action(async (opts) => {
-    const { body } = await api("/api/permissions", {
+    const { body } = await api("/api/v1/permissions", {
       method: "POST",
       body: JSON.stringify({
         principal:   opts.principal,
@@ -635,7 +635,7 @@ perms
     if (opts.filterExpr   !== undefined) patch.filterExpr   = opts.filterExpr  || null;
     if (opts.auditReads   !== undefined) patch.auditReads   = opts.auditReads  === "true";
     if (opts.auditWrites  !== undefined) patch.auditWrites  = opts.auditWrites === "true";
-    const { body } = await api(`/api/permissions/${id}`, {
+    const { body } = await api(`/api/v1/permissions/${id}`, {
       method: "PUT",
       body: JSON.stringify(patch),
     });
@@ -647,7 +647,7 @@ perms
   .command("delete <id>")
   .description("Delete a permission rule by ID")
   .action(async (id) => {
-    await api(`/api/permissions/${id}`, { method: "DELETE" });
+    await api(`/api/v1/permissions/${id}`, { method: "DELETE" });
     console.log(`Permission ${id} deleted`);
   });
 
@@ -655,22 +655,21 @@ perms
 program
   .command("llms")
   .description("Fetch and print an org's llms.txt (pipe into LLM context)")
-  .option("--auth", "Use the authenticated endpoint (GET /api/orgs/{slug}/llms.txt)")
   .option("--org <slug>", "Org slug to fetch (defaults to current org's slug)")
   .action(async (opts) => {
     let slug = opts.org as string | undefined;
     if (!slug) {
-      const { body } = await api("/api/org");
+      const { body } = await api("/api/v1/org");
       const { current, orgs } = body as { current: string; orgs: { id: string; slug: string }[] };
       const active = orgs.find(o => o.id === current);
       slug = active?.slug;
       if (!slug) { console.error("Error: could not determine current org slug"); process.exit(1); }
     }
 
-    const path = opts.auth ? `/api/orgs/${slug}/llms.txt` : `/orgs/${slug}/llms.txt`;
+    const path = `/api/v1/orgs/${slug}/llms.txt`;
     const config = readConfig();
     const headers: Record<string, string> = { "Origin": BASE_URL() };
-    if (opts.auth && config.cookie) headers["Cookie"] = config.cookie;
+    if (config.cookie) headers["Cookie"] = config.cookie;
 
     const res = await fetch(`${BASE_URL()}${path}`, { headers });
     if (!res.ok) {
