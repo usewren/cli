@@ -283,13 +283,15 @@ tree
   });
 
 tree
-  .command("set <treeName> <path> <documentId>")
-  .description("Assign a document to a tree path")
+  .command("set <treeName> <path> [documentId]")
+  .description("Assign a document to a tree path, or create an empty folder if no documentId")
   .action(async (treeName, path, documentId) => {
     const p = path.startsWith("/") ? path : "/" + path;
+    const payload: Record<string, unknown> = {};
+    if (documentId) payload.documentId = documentId;
     const { body } = await api(`/api/v1/tree/${treeName}${p}`, {
       method: "PUT",
-      body: JSON.stringify({ documentId }),
+      body: JSON.stringify(payload),
     });
     print(body);
   });
