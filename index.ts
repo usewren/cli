@@ -262,6 +262,62 @@ schema
     print(body);
   });
 
+// Dry-run schema validation — runs the current or a proposed schema against
+// every existing document in the collection and reports what would fail.
+// Exits with code 1 if any documents would fail, so it can gate deployments.
+schema
+  .command("validate <collection> [proposedJson]")
+  .description("Dry-run the current or a proposed schema against every existing document")
+  .option("--max <n>", "Max documents to check (default 10000, cap 50000)", "10000")
+  .option("--limit <n>", "Max failure details to return (default 100, cap 1000)", "100")
+  .option("--json", "Print the full JSON response instead of a human summary")
+  .action(async (collection, proposedJson, opts) => {
+    let parsedProposed: unknown = undefined;
+    if (proposedJson) {
+      try { parsedProposed = JSON.parse(proposedJson); }
+      catch { console.error("Error: invalid JSON in proposed schema"); process.exit(1); }
+    }
+
+    const qs = `?max=${encodeURIComponent(opts.max)}&limit=${encodeURIComponent(opts.limit)}`;
+    const { body } = await api(`/api/v1/${collection}/_schema/validate${qs}`, {
+      method: parsedProposed !== undefined ? "POST" : "GET",
+      body: parsedProposed !== undefined ? JSON.stringify({ schema: parsedProposed }) : undefined,
+    });
+
+    if (opts.json) {
+      print(body);
+    } else {
+      const r = body as {
+        collection: string;
+        schemaSource: "current" | "proposed";
+        checked: number;
+        limitReached: boolean;
+        valid: number;
+        invalid: number;
+        failures: Array<{ id: string; version: number; errors: string[] }>;
+        failuresTruncated: boolean;
+      };
+      const source = r.schemaSource === "proposed" ? "proposed schema" : "current schema";
+      console.log(`Collection: ${r.collection}`);
+      console.log(`Schema:     ${source}`);
+      console.log(`Checked:    ${r.checked}${r.limitReached ? " (limit reached — use --max to check more)" : ""}`);
+      console.log(`Valid:      ${r.valid}`);
+      console.log(`Invalid:    ${r.invalid}`);
+      if (r.failures.length > 0) {
+        console.log("");
+        console.log("Failures:");
+        for (const f of r.failures) {
+          console.log(`  ${f.id} (v${f.version})`);
+          for (const err of f.errors) console.log(`    ${err}`);
+        }
+        if (r.failuresTruncated) {
+          console.log(`  … ${r.invalid - r.failures.length} more not shown (use --limit to see more)`);
+        }
+      }
+      if (r.invalid > 0) process.exit(1);
+    }
+  });
+
 // --- Tree ---
 const tree = program.command("tree").description("Tree path management");
 
