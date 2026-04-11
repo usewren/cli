@@ -293,7 +293,22 @@ tree
       method: "PUT",
       body: JSON.stringify(payload),
     });
-    print(body);
+    // If the server returned a hint (first PUT on a new tree), print the
+    // normal response without the hint, then the hint message separately.
+    if (body && typeof body === "object" && "hint" in body) {
+      const { hint, ...rest } = body as Record<string, unknown>;
+      print(rest);
+      const h = hint as { message?: string; public_read_example?: unknown };
+      console.error(""); // blank line on stderr so pipes stay clean
+      console.error(`ℹ  ${h.message ?? ""}`);
+      if (h.public_read_example) {
+        console.error("");
+        console.error("   To make it publicly readable:");
+        console.error(`   ${JSON.stringify(h.public_read_example, null, 2).replace(/\n/g, "\n   ")}`);
+      }
+    } else {
+      print(body);
+    }
   });
 
 tree
