@@ -167,6 +167,42 @@ program
     print(body);
   });
 
+// --- Natural-key operations ---
+// These only work on collections that have `naturalKey: "fieldName"` set
+// in their schema. Most commonly used to replace list-then-put push
+// scripts with a single idempotent upsert call.
+
+program
+  .command("get-by-key <collection> <keyValue>")
+  .description("Get a document by its natural key (requires naturalKey on the schema)")
+  .option("--label <label>", "Return state at this label")
+  .action(async (collection, keyValue, opts) => {
+    const params = opts.label ? `?label=${encodeURIComponent(opts.label)}` : "";
+    const { body } = await api(`/api/v1/${collection}/by-key/${encodeURIComponent(keyValue)}${params}`);
+    print(body);
+  });
+
+program
+  .command("upsert <collection> <keyValue> <json>")
+  .description("Create or update a document by natural key (replaces list-then-put push scripts)")
+  .action(async (collection, keyValue, json) => {
+    const { body } = await api(`/api/v1/${collection}/by-key/${encodeURIComponent(keyValue)}`, {
+      method: "PUT",
+      body: json,
+    });
+    print(body);
+  });
+
+program
+  .command("delete-by-key <collection> <keyValue>")
+  .description("Delete a document by its natural key")
+  .action(async (collection, keyValue) => {
+    const { body } = await api(`/api/v1/${collection}/by-key/${encodeURIComponent(keyValue)}`, {
+      method: "DELETE",
+    });
+    print(body);
+  });
+
 // --- Versions ---
 program
   .command("paths <collection> <id>")
@@ -232,6 +268,7 @@ schema
   .description("Set (or replace) the JSON Schema for a collection")
   .option("--display-name <template>", "Display name template, e.g. \"{title}\" or \"{first} {last}\"")
   .option("--list-columns <fields>", "Comma-separated fields to show as columns in the document list, e.g. \"date,title,venue\"")
+  .option("--natural-key <field>", "Top-level field used as the document's stable natural key (e.g. \"slug\"). Enables /by-key/ and upsert.")
   .option("--type <type>", "Collection type: json (default) or binary")
   .action(async (collection, json, opts) => {
     const collectionType: string | undefined = opts.type;
@@ -245,6 +282,7 @@ schema
     if (parsed !== undefined) payload.schema = parsed;
     if (opts.displayName) payload.displayName = opts.displayName;
     if (opts.listColumns) payload.listColumns = opts.listColumns.split(",").map((c: string) => c.trim()).filter(Boolean);
+    if (opts.naturalKey) payload.naturalKey = opts.naturalKey;
     if (collectionType) payload.collectionType = collectionType;
 
     const { body } = await api(`/api/v1/${collection}/_schema`, {
