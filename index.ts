@@ -94,10 +94,19 @@ auth
 
 auth
   .command("whoami")
-  .description("Show current session")
+  .description("Show current principal, org, role, and matching permission rules")
   .action(async () => {
-    const { body } = await api("/api/auth/get-session");
-    print(body.user);
+    const { body } = await api("/api/v1/me");
+    print(body);
+  });
+
+// Also exposed as top-level `wren me` for symmetry with the API endpoint
+program
+  .command("me")
+  .description("Show current principal, org, role, and matching permission rules")
+  .action(async () => {
+    const { body } = await api("/api/v1/me");
+    print(body);
   });
 
 // --- Collections ---
