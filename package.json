@@ -1,8 +1,33 @@
 {
-  "name": "cli",
-  "module": "index.ts",
+  "name": "wren-cli",
+  "version": "0.4.2",
+  "description": "CLI for WREN — deploy static sites, manage versioned JSON documents, and control trees",
   "type": "module",
-  "private": true,
+  "bin": {
+    "wren": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "config.ts"
+  ],
+  "keywords": [
+    "wren",
+    "deploy",
+    "versioned",
+    "json",
+    "cms",
+    "static-site",
+    "cli"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wrenhq/wren"
+  },
+  "homepage": "https://wren.aemwip.com",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "devDependencies": {
     "@types/bun": "^1.3.11"
   },
