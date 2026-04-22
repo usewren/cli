@@ -43,6 +43,23 @@ async function apiMultipart(path: string, formData: FormData, method = "POST") {
   return { body, res };
 }
 
+// Like api() but returns null on error instead of exiting
+async function apiSafe(path: string, options: RequestInit = {}): Promise<{ body: unknown; res: Response } | null> {
+  const config = readConfig();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "Origin": BASE_URL(),
+    ...(options.headers as Record<string, string> ?? {}),
+  };
+  if (config.cookie) headers["Cookie"] = config.cookie;
+
+  const res = await fetch(`${BASE_URL()}${path}`, { ...options, headers });
+  const body = await res.json();
+  if (!res.ok) return null;
+  return { body, res };
+}
+
 function print(data: unknown) {
   console.log(JSON.stringify(data, null, 2));
 }
@@ -801,6 +818,246 @@ program
     }
     const text = await res.text();
     process.stdout.write(text);
+  });
+
+// ── Deploy ──────────────────────────────────────────────────────────────────
+// Uploads a directory to a binary collection and assigns each file to a tree,
+// like `vercel` but for WREN-hosted sites.
+
+import { join, relative } from "path";
+import { readdirSync, statSync } from "fs";
+
+function walkDir(dir: string, base: string = dir): string[] {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      // Skip common junk
+      if ([".git", "node_modules", ".next", "__pycache__", ".DS_Store"].includes(entry.name)) continue;
+      files.push(...walkDir(full, base));
+    } else if (entry.isFile()) {
+      files.push("/" + relative(base, full));
+    }
+  }
+  return files.sort();
+}
+
+program
+  .command("deploy [dir]")
+  .description("Deploy a directory as a static site to a WREN tree")
+  .requiredOption("-t, --tree <name>", "Tree name (e.g. mysite)")
+  .option("-c, --collection <name>", "Binary collection to store assets in (default: <tree>-assets)")
+  .option("-l, --label <label>", "Label all uploaded versions with this label")
+  .option("--public", "Auto-create principal=* read permission (with labelFilter if --label is set)")
+  .option("--clean", "Remove tree paths for files that no longer exist locally")
+  .option("--dry-run", "Show what would be uploaded without actually doing it")
+  .action(async (dir, opts) => {
+    const sourceDir = dir ? (dir.startsWith("/") ? dir : join(process.cwd(), dir)) : process.cwd();
+    const treeName = opts.tree;
+    const collectionName = opts.collection ?? `${treeName}-assets`;
+    const label: string | undefined = opts.label;
+    const dryRun = !!opts.dryRun;
+
+    // Validate source directory
+    try { statSync(sourceDir); } catch {
+      console.error(`Error: directory not found: ${sourceDir}`);
+      process.exit(1);
+    }
+
+    // Scan local files
+    const localFiles = walkDir(sourceDir);
+    if (localFiles.length === 0) {
+      console.error("Error: no files found in directory");
+      process.exit(1);
+    }
+    console.log(`Found ${localFiles.length} files in ${sourceDir}`);
+
+    // Ensure binary collection exists with schema
+    if (!dryRun) {
+      const existing = await apiSafe(`/api/v1/${collectionName}/_schema`);
+      if (!existing) {
+        console.log(`Creating binary collection: ${collectionName}`);
+        await api(`/api/v1/${collectionName}/_schema`, {
+          method: "PUT",
+          body: JSON.stringify({ collectionType: "binary" }),
+        });
+      }
+    }
+
+    // Fetch existing tree to find already-deployed files
+    let existingNodes: { path: string; documentId: string; document?: { version: number; data: Record<string, unknown> } }[] = [];
+    const treeResult = await apiSafe(`/api/v1/tree/${treeName}?full=true`);
+    if (treeResult) {
+      existingNodes = (treeResult.body as { nodes: typeof existingNodes }).nodes ?? [];
+    }
+    const existingByPath = new Map(existingNodes.map(n => [n.path, n]));
+
+    // Diff against existing: compare file sizes. If unchanged, skip upload.
+    // (A content-hash approach would be better but requires server changes;
+    // size is good enough for v1 and catches most real edits.)
+    let uploaded = 0;
+    let skipped = 0;
+    let assigned = 0;
+
+    for (const relPath of localFiles) {
+      const absPath = join(sourceDir, relPath);
+      const localSize = statSync(absPath).size;
+      const existing = existingByPath.get(relPath);
+
+      // Check if the file is already deployed with the same size
+      const remoteSize = existing?.document?.data?.size as number | undefined;
+      if (remoteSize === localSize && existing?.documentId) {
+        skipped++;
+        // Still label if needed and not dry-run
+        if (label && !dryRun) {
+          await apiSafe(`/api/v1/${collectionName}/${existing.documentId}/labels`, {
+            method: "POST",
+            body: JSON.stringify({ label }),
+          });
+        }
+        continue;
+      }
+
+      if (dryRun) {
+        const action = existing ? "update" : "upload";
+        console.log(`  ${action}: ${relPath}`);
+        uploaded++;
+        continue;
+      }
+
+      // Upload or update the file
+      const fileHandle = Bun.file(absPath);
+      const blob = await fileHandle.arrayBuffer();
+      const filename = relPath.split("/").pop()!;
+      const form = new FormData();
+      form.append("file", new File([blob], filename, { type: fileHandle.type || "application/octet-stream" }));
+
+      let docId: string;
+      if (existing?.documentId) {
+        // Update existing document (new version)
+        const { body } = await apiMultipart(`/api/v1/${collectionName}/${existing.documentId}`, form, "PUT");
+        docId = (body as { id: string }).id;
+      } else {
+        // Create new document
+        const { body } = await apiMultipart(`/api/v1/${collectionName}`, form, "POST");
+        docId = (body as { id: string }).id;
+        // Assign to tree
+        await api(`/api/v1/tree/${treeName}${relPath}`, {
+          method: "PUT",
+          body: JSON.stringify({ documentId: docId }),
+        });
+        assigned++;
+      }
+
+      // Label the uploaded version
+      if (label) {
+        await api(`/api/v1/${collectionName}/${docId}/labels`, {
+          method: "POST",
+          body: JSON.stringify({ label }),
+        });
+      }
+
+      uploaded++;
+      process.stdout.write(`\r  Uploaded ${uploaded} files...`);
+    }
+    if (uploaded > 0 && !dryRun) console.log(""); // clear the \r line
+
+    // Clean up removed files
+    let removed = 0;
+    if (opts.clean) {
+      const localSet = new Set(localFiles);
+      for (const node of existingNodes) {
+        if (!localSet.has(node.path)) {
+          if (dryRun) {
+            console.log(`  remove: ${node.path}`);
+          } else {
+            await api(`/api/v1/tree/${treeName}${node.path}`, { method: "DELETE" });
+          }
+          removed++;
+        }
+      }
+    }
+
+    // Auto-create public permission
+    if (opts.public && !dryRun) {
+      const permPayload: Record<string, unknown> = {
+        principal: "*",
+        resource: `tree:${treeName}`,
+        access: "read",
+      };
+      if (label) permPayload.labelFilter = label;
+      const permResult = await apiSafe("/api/v1/permissions", {
+        method: "POST",
+        body: JSON.stringify(permPayload),
+      });
+      if (permResult) {
+        console.log(`Created public read permission for tree:${treeName}${label ? ` (labelFilter: ${label})` : ""}`);
+      }
+    }
+
+    // Summary
+    console.log("");
+    if (dryRun) {
+      console.log(`Dry run: ${uploaded} to upload, ${skipped} unchanged, ${removed} to remove`);
+    } else {
+      console.log(`Deployed to tree "${treeName}":  ${uploaded} uploaded, ${skipped} unchanged, ${assigned} new paths${removed ? `, ${removed} removed` : ""}`);
+      if (label) console.log(`Label: ${label}`);
+
+      // Print the public URL
+      try {
+        const { body } = await api("/api/v1/me");
+        const slug = (body as { org: { slug: string } }).org.slug;
+        const base = BASE_URL();
+        console.log(`\nPreview:  ${base}/orgs/${slug}/tree/${treeName}/index.html`);
+        if (label) console.log(`Labeled:  ${base}/orgs/${slug}/tree/${treeName}/index.html?label=${label}`);
+      } catch { /* no /me access = API key without scope, skip URL hint */ }
+    }
+  });
+
+// ── Promote ─────────────────────────────────────────────────────────────────
+// Sets a label on the current version of every document in a tree.
+// Use after `wren deploy` to make the deployed version public.
+
+program
+  .command("promote <treeName>")
+  .description("Set a label on every document in a tree (default: 'published')")
+  .option("-l, --label <label>", "Label to set", "published")
+  .option("--from <label>", "Only promote documents that carry this label (e.g. promote preview → published)")
+  .action(async (treeName, opts) => {
+    const targetLabel = opts.label;
+    const fromLabel: string | undefined = opts.from;
+
+    // Fetch the full tree
+    const qs = fromLabel ? `?full=true&label=${encodeURIComponent(fromLabel)}` : "?full=true";
+    const { body } = await api(`/api/v1/tree/${treeName}${qs}`);
+    const nodes = (body as { nodes: { path: string; documentId: string; document: { collection: string; version: number } }[] }).nodes ?? [];
+
+    if (nodes.length === 0) {
+      console.log(`Tree "${treeName}" is empty${fromLabel ? ` (no documents with label "${fromLabel}")` : ""}.`);
+      return;
+    }
+
+    console.log(`Promoting ${nodes.length} documents in tree "${treeName}" → label "${targetLabel}"${fromLabel ? ` (from "${fromLabel}")` : ""}...`);
+
+    let promoted = 0;
+    for (const node of nodes) {
+      const version = node.document.version;
+      await api(`/api/v1/${node.document.collection}/${node.documentId}/labels`, {
+        method: "POST",
+        body: JSON.stringify({ label: targetLabel, version }),
+      });
+      promoted++;
+    }
+
+    console.log(`Done: ${promoted} documents labeled "${targetLabel}".`);
+
+    // Show public URL
+    try {
+      const { body: me } = await api("/api/v1/me");
+      const slug = (me as { org: { slug: string } }).org.slug;
+      console.log(`\nPublic: ${BASE_URL()}/orgs/${slug}/tree/${treeName}/index.html?label=${targetLabel}`);
+    } catch { /* skip */ }
   });
 
 program.parse();
