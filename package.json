@@ -1,5 +1,5 @@
 {
-  "name": "wren-cli",
+  "name": "@usewren/cli",
   "version": "0.4.2",
   "description": "CLI for WREN — deploy static sites, manage versioned JSON documents, and control trees",
   "type": "module",
@@ -22,7 +22,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wrenhq/wren"
+    "url": "https://github.com/usewren/wren"
   },
   "homepage": "https://wren.aemwip.com",
   "engines": {

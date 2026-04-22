@@ -1,4 +1,4 @@
-# wren-cli
+# @usewren/cli
 
 Command-line tool for [WREN](https://wren.aemwip.com) — deploy static sites, manage versioned JSON documents, and control trees.
 
@@ -7,7 +7,7 @@ Command-line tool for [WREN](https://wren.aemwip.com) — deploy static sites, m
 Requires [Bun](https://bun.sh) (v1.0+).
 
 ```bash
-bun install -g wren-cli
+bun install -g @usewren/cli
 ```
 
 ## Quick start
