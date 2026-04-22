@@ -39,6 +39,7 @@
     "commander": "^14.0.3"
   },
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "release": "npm version patch && npm publish --access public"
   }
 }
