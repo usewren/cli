@@ -1060,4 +1060,74 @@ program
     } catch { /* skip */ }
   });
 
+// ── Query ───────────────────────────────────────────────────────────────────
+
+program
+  .command("query <collection>")
+  .description("Query documents with projection, filtering, and aggregation")
+  .option("--where <filter>", "Filter expression (e.g. category:news)")
+  .option("--select <fields>", "Comma-separated projection fields")
+  .option("--limit <n>", "Max results", "100")
+  .option("--label <label>", "Version label")
+  .option("--cursor <cursor>", "Pagination cursor from previous response")
+  .option("--json <body>", "Full query body as JSON (overrides other options)")
+  .action(async (collection, opts) => {
+    const body = opts.json
+      ? JSON.parse(opts.json)
+      : {
+          ...(opts.where ? { where: opts.where } : {}),
+          ...(opts.select ? { select: opts.select.split(",").map((s: string) => s.trim()) } : {}),
+          limit: parseInt(opts.limit),
+          ...(opts.label ? { label: opts.label } : {}),
+          ...(opts.cursor ? { cursor: opts.cursor } : {}),
+        };
+    const { body: result } = await api(`/api/v1/${collection}/_query`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    print(result);
+  });
+
+// ── Materialized queries ────────────────────────────────────────────────────
+const materialized = program.command("materialized").description("Materialized query management");
+
+materialized
+  .command("list <collection>")
+  .description("List materialized queries for a collection")
+  .action(async (collection) => {
+    const { body } = await api(`/api/v1/${collection}/_materialized`);
+    print(body);
+  });
+
+materialized
+  .command("set <collection> <name>")
+  .description("Create or update a materialized query")
+  .requiredOption("--query <json>", "Query body as JSON")
+  .option("--refresh <mode>", "Refresh mode: write (default) or manual", "write")
+  .action(async (collection, name, opts) => {
+    const { body } = await api(`/api/v1/${collection}/_materialized/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify({ query: JSON.parse(opts.query), refreshOn: opts.refresh }),
+    });
+    print(body);
+  });
+
+materialized
+  .command("get <collection> <name>")
+  .description("Get the result of a materialized query")
+  .action(async (collection, name) => {
+    const { body } = await api(`/api/v1/${collection}/_materialized/${encodeURIComponent(name)}`);
+    print(body);
+  });
+
+materialized
+  .command("delete <collection> <name>")
+  .description("Delete a materialized query")
+  .action(async (collection, name) => {
+    const { body } = await api(`/api/v1/${collection}/_materialized/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+    print(body);
+  });
+
 program.parse();
