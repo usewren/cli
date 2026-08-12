@@ -1130,4 +1130,91 @@ materialized
     print(body);
   });
 
+// ── Webhooks ────────────────────────────────────────────────────────────────
+
+const webhooks = program.command("webhooks").description("Webhook management");
+
+webhooks
+  .command("list")
+  .description("List all webhooks for your org")
+  .action(async () => {
+    const { body } = await api("/api/v1/webhooks");
+    const list = (body as { webhooks: { id: string; url: string; events: string[]; enabled: boolean; consecFailures: number }[] }).webhooks;
+    if (list.length === 0) { console.log("No webhooks."); return; }
+    for (const w of list) {
+      const status = w.enabled ? (w.consecFailures > 0 ? `active (${w.consecFailures} failures)` : "active") : "DISABLED";
+      console.log(`  ${w.id}  ${w.url}  [${w.events.join(",")||"all"}]  ${status}`);
+    }
+  });
+
+webhooks
+  .command("create <url>")
+  .description("Create a new webhook (secret shown once)")
+  .option("--events <events>", "Comma-separated event types to subscribe to (empty = all)")
+  .action(async (url, opts) => {
+    const events = opts.events ? opts.events.split(",").map((e: string) => e.trim()) : [];
+    const { body } = await api("/api/v1/webhooks", {
+      method: "POST",
+      body: JSON.stringify({ url, events }),
+    });
+    const w = body as { id: string; url: string; secret: string; events: string[] };
+    console.log(`Created webhook ${w.id}`);
+    console.log(`  URL:    ${w.url}`);
+    console.log(`  Events: ${w.events.length ? w.events.join(", ") : "all"}`);
+    console.log(`\n  Secret: ${w.secret}\n`);
+    console.log("Store this secret now — it will not be shown again.");
+  });
+
+webhooks
+  .command("update <id>")
+  .description("Update a webhook")
+  .option("--url <url>", "New URL")
+  .option("--events <events>", "Comma-separated event types")
+  .option("--enable", "Re-enable a disabled webhook")
+  .option("--disable", "Disable the webhook")
+  .action(async (id, opts) => {
+    const payload: Record<string, unknown> = {};
+    if (opts.url) payload.url = opts.url;
+    if (opts.events) payload.events = opts.events.split(",").map((e: string) => e.trim());
+    if (opts.enable) payload.enabled = true;
+    if (opts.disable) payload.enabled = false;
+    await api(`/api/v1/webhooks/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+    console.log(`Updated webhook ${id}`);
+  });
+
+webhooks
+  .command("delete <id>")
+  .description("Delete a webhook")
+  .action(async (id) => {
+    await api(`/api/v1/webhooks/${id}`, { method: "DELETE" });
+    console.log(`Deleted webhook ${id}`);
+  });
+
+webhooks
+  .command("deliveries <id>")
+  .description("Show recent delivery log for a webhook")
+  .action(async (id) => {
+    const { body } = await api(`/api/v1/webhooks/${id}/deliveries`);
+    const list = (body as { deliveries: { batchKey: string; eventCount: number; attempt: number; statusCode: number | null; error: string | null; deliveredAt: string }[] }).deliveries;
+    if (list.length === 0) { console.log("No deliveries yet."); return; }
+    for (const d of list) {
+      const status = d.statusCode ? `${d.statusCode}` : `ERR: ${d.error?.slice(0, 60)}`;
+      console.log(`  ${new Date(d.deliveredAt).toISOString().slice(0, 19)}  batch:${d.batchKey.slice(-10)}  ${d.eventCount} events  attempt ${d.attempt}  ${status}`);
+    }
+  });
+
+webhooks
+  .command("replay <id>")
+  .description("Re-deliver past events to a webhook")
+  .requiredOption("--since <date>", "Start date (ISO)")
+  .option("--until <date>", "End date (ISO, default now)")
+  .action(async (id, opts) => {
+    const { body } = await api(`/api/v1/webhooks/${id}/replay`, {
+      method: "POST",
+      body: JSON.stringify({ since: opts.since, until: opts.until }),
+    });
+    const r = body as { replayed: number; batchKey?: string };
+    console.log(`Replayed ${r.replayed} events${r.batchKey ? ` (batch: ${r.batchKey})` : ""}`);
+  });
+
 program.parse();
