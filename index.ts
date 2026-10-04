@@ -1036,7 +1036,31 @@ program
     const targetLabel = opts.label;
     const fromLabel: string | undefined = opts.from;
 
-    // Fetch the full tree
+    // Preferred: server-side promote moves every label in one transaction, so
+    // visitors never see a half-promoted site. Servers without it answer 405.
+    const config = readConfig();
+    const atomic = await fetch(`${BASE_URL()}/api/v1/tree/${treeName}/_promote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", Origin: BASE_URL(), ...(config.cookie ? { Cookie: config.cookie } : {}) },
+      body: JSON.stringify({ label: targetLabel, ...(fromLabel ? { from: fromLabel } : {}) }),
+    });
+    if (atomic.status !== 405) {
+      const body = await atomic.json() as { error?: string; promoted?: unknown[] };
+      if (!atomic.ok) {
+        console.error(`Error: ${body.error ?? atomic.statusText}`);
+        process.exit(1);
+      }
+      console.log(`Done: ${body.promoted!.length} documents in tree "${treeName}" labeled "${targetLabel}"${fromLabel ? ` (from "${fromLabel}")` : ""} in one transaction.`);
+      try {
+        const { body: me } = await api("/api/v1/me");
+        const slug = (me as { org: { slug: string } }).org.slug;
+        console.log(`\nPublic: ${BASE_URL()}/orgs/${slug}/tree/${treeName}/index.html`);
+      } catch { /* skip */ }
+      return;
+    }
+    console.log("Server has no atomic promote; labeling documents one by one...");
+
+    // Fallback for older servers. Fetch the full tree
     const qs = fromLabel ? `?full=true&label=${encodeURIComponent(fromLabel)}` : "?full=true";
     const { body } = await api(`/api/v1/tree/${treeName}${qs}`);
     const nodes = (body as { nodes: { path: string; documentId: string; document: { collection: string; version: number } }[] }).nodes ?? [];
