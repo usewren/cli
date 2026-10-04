@@ -849,7 +849,7 @@ program
   .requiredOption("-t, --tree <name>", "Tree name (e.g. mysite)")
   .option("-c, --collection <name>", "Binary collection to store assets in (default: <tree>-assets)")
   .option("-l, --label <label>", "Label all uploaded versions with this label")
-  .option("--public", "Auto-create principal=* read permission (with labelFilter if --label is set)")
+  .option("--public", "Auto-create principal=* read permission (labelFilter 'published' if --label is set, so visitors only see promoted versions)")
   .option("--clean", "Remove tree paths for files that no longer exist locally")
   .option("--dry-run", "Show what would be uploaded without actually doing it")
   .action(async (dir, opts) => {
@@ -893,21 +893,23 @@ program
     }
     const existingByPath = new Map(existingNodes.map(n => [n.path, n]));
 
-    // Diff against existing: compare file sizes. If unchanged, skip upload.
-    // (A content-hash approach would be better but requires server changes;
-    // size is good enough for v1 and catches most real edits.)
+    // Diff against existing by SHA-256 (stored by the server on upload). Comparing
+    // sizes missed same-size edits (a changed digit or date), which were silently
+    // never deployed. Files uploaded before the server stored hashes have no
+    // sha256 and are re-uploaded once.
     let uploaded = 0;
     let skipped = 0;
     let assigned = 0;
 
     for (const relPath of localFiles) {
       const absPath = join(sourceDir, relPath);
-      const localSize = statSync(absPath).size;
       const existing = existingByPath.get(relPath);
 
-      // Check if the file is already deployed with the same size
-      const remoteSize = existing?.document?.data?.size as number | undefined;
-      if (remoteSize === localSize && existing?.documentId) {
+      const remoteHash = existing?.document?.data?.sha256 as string | undefined;
+      const localHash = remoteHash
+        ? new Bun.CryptoHasher("sha256").update(await Bun.file(absPath).arrayBuffer()).digest("hex")
+        : undefined;
+      if (remoteHash && remoteHash === localHash && existing?.documentId) {
         skipped++;
         // Still label if needed and not dry-run
         if (label && !dryRun) {
@@ -986,13 +988,15 @@ program
         resource: `tree:${treeName}`,
         access: "read",
       };
-      if (label) permPayload.labelFilter = label;
+      // With a deploy label, visitors should only see what has been promoted,
+      // never the label we just deployed under (e.g. preview).
+      if (label) permPayload.labelFilter = "published";
       const permResult = await apiSafe("/api/v1/permissions", {
         method: "POST",
         body: JSON.stringify(permPayload),
       });
       if (permResult) {
-        console.log(`Created public read permission for tree:${treeName}${label ? ` (labelFilter: ${label})` : ""}`);
+        console.log(`Created public read permission for tree:${treeName}${label ? " (labelFilter: published)" : ""}`);
       }
     }
 
@@ -1009,8 +1013,12 @@ program
         const { body } = await api("/api/v1/me");
         const slug = (body as { org: { slug: string } }).org.slug;
         const base = BASE_URL();
-        console.log(`\nPreview:  ${base}/orgs/${slug}/tree/${treeName}/index.html`);
-        if (label) console.log(`Labeled:  ${base}/orgs/${slug}/tree/${treeName}/index.html?label=${label}`);
+        // Public URLs ignore ?label= when the public rule has a labelFilter, so don't print one.
+        console.log(`\nPublic URL (needs a principal=* rule): ${base}/orgs/${slug}/tree/${treeName}/index.html`);
+        if (label && label !== "published") {
+          console.log(`"${label}" versions stay private until promoted. Preview with a key: GET ${base}/api/v1/tree/${treeName}/index.html?label=${label}`);
+          console.log(`Go live: wren promote ${treeName} --from ${label}`);
+        }
       } catch { /* no /me access = API key without scope, skip URL hint */ }
     }
   });
@@ -1056,7 +1064,7 @@ program
     try {
       const { body: me } = await api("/api/v1/me");
       const slug = (me as { org: { slug: string } }).org.slug;
-      console.log(`\nPublic: ${BASE_URL()}/orgs/${slug}/tree/${treeName}/index.html?label=${targetLabel}`);
+      console.log(`\nPublic: ${BASE_URL()}/orgs/${slug}/tree/${treeName}/index.html`);
     } catch { /* skip */ }
   });
 
