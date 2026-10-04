@@ -14,6 +14,38 @@ function authHeaders(config = readConfig()): Record<string, string> {
   return {};
 }
 
+type ParsedBody = { json: true; body: any } | { json: false; text: string };
+
+/** A JSON document given on the command line: checked here, so a typo doesn't reach the server. */
+function jsonArg(text: string): string {
+  try { JSON.parse(text); } catch (e) { console.error(`Error: invalid JSON: ${(e as Error).message}`); process.exit(1); }
+  return text;
+}
+
+// Reads a response body as JSON without throwing: an HTML error page from a
+// proxy or a plain-text 500 comes back as text so callers can report it.
+// An empty body counts as JSON null.
+async function parseBody(res: Response): Promise<ParsedBody> {
+  const text = await res.text();
+  if (text === "") return { json: true, body: null };
+  try {
+    return { json: true, body: JSON.parse(text) };
+  } catch {
+    return { json: false, text };
+  }
+}
+
+// One-line message for a failed or non-JSON response: the server's message or
+// error field, else the status and the start of the body.
+function errorMessage(res: Response, parsed: ParsedBody): string {
+  if (parsed.json) {
+    const body = parsed.body as { message?: string; error?: string } | null;
+    return body?.message ?? body?.error ?? (res.statusText || `HTTP ${res.status}`);
+  }
+  const excerpt = parsed.text.replace(/\s+/g, " ").trim().slice(0, 200);
+  return `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""} (not JSON): ${excerpt}`;
+}
+
 async function api(path: string, options: RequestInit = {}) {
   const config = readConfig();
   const headers: Record<string, string> = {
@@ -25,13 +57,13 @@ async function api(path: string, options: RequestInit = {}) {
   Object.assign(headers, authHeaders(config));
 
   const res = await fetch(`${BASE_URL()}${path}`, { ...options, headers });
-  const body = await res.json();
+  const parsed = await parseBody(res);
 
-  if (!res.ok) {
-    console.error(`Error: ${body.message ?? body.error ?? res.statusText}`);
+  if (!res.ok || !parsed.json) {
+    console.error(`Error: ${errorMessage(res, parsed)}`);
     process.exit(1);
   }
-  return { body, res };
+  return { body: parsed.body, res };
 }
 
 // For multipart uploads — does NOT set Content-Type (let the browser set boundary)
@@ -44,16 +76,16 @@ async function apiMultipart(path: string, formData: FormData, method = "POST") {
   Object.assign(headers, authHeaders(config));
 
   const res = await fetch(`${BASE_URL()}${path}`, { method, headers, body: formData });
-  const body = await res.json();
+  const parsed = await parseBody(res);
 
-  if (!res.ok) {
-    console.error(`Error: ${(body as { error?: string; message?: string }).message ?? (body as { error?: string }).error ?? res.statusText}`);
+  if (!res.ok || !parsed.json) {
+    console.error(`Error: ${errorMessage(res, parsed)}`);
     process.exit(1);
   }
-  return { body, res };
+  return { body: parsed.body, res };
 }
 
-// Like api() but returns null on error instead of exiting
+// Like api() but returns null on an error status or a non-JSON body instead of exiting
 async function apiSafe(path: string, options: RequestInit = {}): Promise<{ body: unknown; res: Response } | null> {
   const config = readConfig();
   const headers: Record<string, string> = {
@@ -65,9 +97,16 @@ async function apiSafe(path: string, options: RequestInit = {}): Promise<{ body:
   Object.assign(headers, authHeaders(config));
 
   const res = await fetch(`${BASE_URL()}${path}`, { ...options, headers });
-  const body = await res.json();
-  if (!res.ok) return null;
-  return { body, res };
+  const parsed = await parseBody(res);
+  if (!res.ok || !parsed.json) return null;
+  return { body: parsed.body, res };
+}
+
+// The current org's slug for URL hints, or undefined when /me can't be read
+// (network error, a key without access to it). Never exits.
+async function currentOrgSlug(): Promise<string | undefined> {
+  const me = await apiSafe("/api/v1/me").catch(() => null);
+  return (me?.body as { org?: { slug?: string } } | null | undefined)?.org?.slug;
 }
 
 function print(data: unknown) {
@@ -77,7 +116,10 @@ function print(data: unknown) {
 program
   .name("wren")
   .description("CLI for the Wren versioned JSON storage service")
-  .version("0.5.0");
+  .version("0.5.0")
+  // Program options must come before the subcommand, so `wren --version` prints
+  // the CLI version while `wren label … --version 1` reaches the subcommand.
+  .enablePositionalOptions();
 
 // --- Config ---
 program
@@ -131,7 +173,8 @@ auth
       console.error(`Error: key rejected by ${BASE_URL()} (${res.status})`);
       process.exit(1);
     }
-    const me = await res.json() as { org?: { slug?: string; name?: string } };
+    const parsed = await parseBody(res);
+    const me = (parsed.json ? parsed.body ?? {} : {}) as { org?: { slug?: string; name?: string } };
     writeConfig({ ...config, apiKey: key });
     console.log(`API key stored for org ${me.org?.name ?? ""} (${me.org?.slug ?? "?"}). It takes precedence over a session cookie.`);
   });
@@ -178,15 +221,15 @@ program
 program
   .command("list <collection>")
   .description("List documents in a collection")
-  .option("--filter <filter>", "Filter expression")
-  .option("--limit <n>", "Page size", "20")
-  .option("--cursor <cursor>", "Pagination cursor")
+  .option("--filter <filter>", "Filter expression, e.g. kind:odd or \"year>=2024 AND status:live\"")
+  .option("--limit <n>", "Page size (max 200)", "20")
+  .option("--offset <n>", "Number of documents to skip, for paging with --limit")
   .option("--label <label>", "Return state at this label")
   .action(async (collection, opts) => {
     const params = new URLSearchParams();
-    if (opts.filter) params.set("filter", opts.filter);
+    if (opts.filter) params.set("where", opts.filter);
     if (opts.limit) params.set("limit", opts.limit);
-    if (opts.cursor) params.set("cursor", opts.cursor);
+    if (opts.offset) params.set("offset", opts.offset);
     if (opts.label) params.set("label", opts.label);
     const { body } = await api(`/api/v1/${collection}?${params}`);
     print(body);
@@ -208,7 +251,7 @@ program
   .action(async (collection, json) => {
     const { body } = await api(`/api/v1/${collection}`, {
       method: "POST",
-      body: json,
+      body: jsonArg(json),
     });
     print(body);
   });
@@ -219,7 +262,7 @@ program
   .action(async (collection, id, json) => {
     const { body } = await api(`/api/v1/${collection}/${id}`, {
       method: "PUT",
-      body: json,
+      body: jsonArg(json),
     });
     print(body);
   });
@@ -313,9 +356,23 @@ program
   .requiredOption("--v1 <v1>", "First version or label")
   .requiredOption("--v2 <v2>", "Second version or label")
   .action(async (collection, id, opts) => {
-    const { body } = await api(`/api/v1/${collection}/${id}/diff?v1=${opts.v1}&v2=${opts.v2}`);
+    const v1 = await resolveVersion(collection, id, opts.v1);
+    const v2 = await resolveVersion(collection, id, opts.v2);
+    const { body } = await api(`/api/v1/${collection}/${id}/diff?v1=${v1}&v2=${v2}`);
     print(body);
   });
+
+// The diff endpoint only takes version numbers, so a label is resolved to the
+// version it points at first.
+async function resolveVersion(collection: string, id: string, ref: string): Promise<number> {
+  if (/^\d+$/.test(ref)) return Number(ref);
+  const found = await apiSafe(`/api/v1/${collection}/${id}?label=${encodeURIComponent(ref)}`);
+  if (!found) {
+    console.error(`Error: no version of ${collection}/${id} has the label "${ref}"`);
+    process.exit(1);
+  }
+  return (found.body as { version: number }).version;
+}
 
 // --- Schema ---
 const schema = program.command("schema").description("Collection JSON Schema management");
@@ -541,8 +598,7 @@ program
     const qs = opts.version ? `?version=${opts.version}` : "";
     const res = await fetch(`${BASE_URL()}/api/v1/${collection}/${id}/raw${qs}`, { headers });
     if (!res.ok) {
-      const body = await res.json() as { error?: string };
-      console.error(`Error: ${body.error ?? res.statusText}`);
+      console.error(`Error: ${errorMessage(res, await parseBody(res))}`);
       process.exit(1);
     }
     const buffer = Buffer.from(await res.arrayBuffer());
@@ -800,7 +856,8 @@ perms
   .command("update <id>")
   .description("Update fields on an existing permission rule")
   .option("--access <access>",       "none | read | write | admin")
-  .option("--label-filter <label>",  "Set label filter (use --no-label-filter to clear)")
+  .option("--label-filter <label>",  "Set label filter")
+  .option("--no-label-filter",       "Clear the label filter")
   .option("--filter-lang <lang>",    "jq | jmespath | jsonata")
   .option("--filter-expr <expr>",    "Filter expression")
   .option("--audit-reads <bool>",    "true | false")
@@ -808,6 +865,7 @@ perms
   .action(async (id, opts) => {
     const patch: Record<string, unknown> = {};
     if (opts.access       !== undefined) patch.access       = opts.access;
+    // --no-label-filter sets labelFilter to false, which clears it
     if (opts.labelFilter  !== undefined) patch.labelFilter  = opts.labelFilter || null;
     if (opts.filterLang   !== undefined) patch.filterLang   = opts.filterLang  || null;
     if (opts.filterExpr   !== undefined) patch.filterExpr   = opts.filterExpr  || null;
@@ -1047,10 +1105,10 @@ program
       console.log(`Deployed to tree "${treeName}":  ${uploaded} uploaded, ${skipped} unchanged, ${assigned} new paths${removed ? `, ${removed} removed` : ""}`);
       if (label) console.log(`Label: ${label}`);
 
-      // Print the public URL
-      try {
-        const { body } = await api("/api/v1/me");
-        const slug = (body as { org: { slug: string } }).org.slug;
+      // Print the public URL. The deploy already succeeded, so a failed /me
+      // lookup (e.g. a key without access to it) only skips the hint.
+      const slug = await currentOrgSlug();
+      if (slug) {
         const base = BASE_URL();
         // Public URLs ignore ?label= when the public rule has a labelFilter, so don't print one.
         console.log(`\nPublic URL (needs a principal=* rule): ${base}/orgs/${slug}/tree/${treeName}/index.html`);
@@ -1058,7 +1116,7 @@ program
           console.log(`"${label}" versions stay private until promoted. Preview with a key: GET ${base}/api/v1/tree/${treeName}/index.html?label=${label}`);
           console.log(`Go live: wren promote ${treeName} --from ${label}`);
         }
-      } catch { /* no /me access = API key without scope, skip URL hint */ }
+      }
     }
   });
 
@@ -1084,17 +1142,14 @@ program
       body: JSON.stringify({ label: targetLabel, ...(fromLabel ? { from: fromLabel } : {}) }),
     });
     if (atomic.status !== 405) {
-      const body = await atomic.json() as { error?: string; promoted?: unknown[] };
-      if (!atomic.ok) {
-        console.error(`Error: ${body.error ?? atomic.statusText}`);
+      const parsed = await parseBody(atomic);
+      if (!atomic.ok || !parsed.json) {
+        console.error(`Error: ${errorMessage(atomic, parsed)}`);
         process.exit(1);
       }
-      console.log(`Done: ${body.promoted!.length} documents in tree "${treeName}" labeled "${targetLabel}"${fromLabel ? ` (from "${fromLabel}")` : ""} in one transaction.`);
-      try {
-        const { body: me } = await api("/api/v1/me");
-        const slug = (me as { org: { slug: string } }).org.slug;
-        console.log(`\nPublic: ${BASE_URL()}/orgs/${slug}/tree/${treeName}/index.html`);
-      } catch { /* skip */ }
+      const body = parsed.body as { promoted: unknown[] };
+      console.log(`Done: ${body.promoted.length} documents in tree "${treeName}" labeled "${targetLabel}"${fromLabel ? ` (from "${fromLabel}")` : ""} in one transaction.`);
+      await printPublicTreeUrl(treeName);
       return;
     }
     console.log("Server has no atomic promote; labeling documents one by one...");
@@ -1123,13 +1178,14 @@ program
 
     console.log(`Done: ${promoted} documents labeled "${targetLabel}".`);
 
-    // Show public URL
-    try {
-      const { body: me } = await api("/api/v1/me");
-      const slug = (me as { org: { slug: string } }).org.slug;
-      console.log(`\nPublic: ${BASE_URL()}/orgs/${slug}/tree/${treeName}/index.html`);
-    } catch { /* skip */ }
+    await printPublicTreeUrl(treeName);
   });
+
+// The promote already succeeded, so a failed /me lookup only skips the URL hint.
+async function printPublicTreeUrl(treeName: string) {
+  const slug = await currentOrgSlug();
+  if (slug) console.log(`\nPublic: ${BASE_URL()}/orgs/${slug}/tree/${treeName}/index.html`);
+}
 
 // ── Query ───────────────────────────────────────────────────────────────────
 
