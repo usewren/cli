@@ -80,10 +80,18 @@ wren download <collection> <id>     Download raw binary (--out <path>)
 
 ### Auth & config
 ```
-wren config --url <url>             Set server URL
-wren auth login -e <email> -p <pw>  Sign in
-wren auth logout                    Sign out
+wren config --url <url>             Set server URL (or WREN_URL)
+wren auth login -e <email> -p <pw>  Sign in with a session cookie
+wren auth key <wren_…>              Use an API key instead (or WREN_API_KEY); no arg = read from stdin
+wren auth key --clear               Forget the stored API key
+wren auth logout                    Sign out and forget the stored key
 wren me                             Show principal, org, role, permissions
+```
+
+Use an API key for scripts and CI: sessions expire, keys don't. `WREN_API_KEY` beats a stored key, which beats the session cookie. The config file (`~/.wren/config.json`) is created readable only by you.
+
+```bash
+WREN_URL=https://wren.aemwip.com WREN_API_KEY=wren_… wren deploy ./dist --tree mysite --label preview
 ```
 
 ### Management

@@ -2,7 +2,17 @@
 import { program } from "commander";
 import { readConfig, writeConfig, type Config } from "./config";
 
-const BASE_URL = () => readConfig().url ?? "http://localhost:4000";
+const BASE_URL = () => (process.env.WREN_URL || readConfig().url || "http://localhost:4000").replace(/\/$/, "");
+
+// API key (WREN_API_KEY env var, or `wren auth key`) takes precedence over the
+// session cookie from `wren auth login`. Keys don't expire mid-run, so they are
+// the right choice for scripts, CI and long tournament days.
+function authHeaders(config = readConfig()): Record<string, string> {
+  const key = process.env.WREN_API_KEY || config.apiKey;
+  if (key) return { Authorization: `Bearer ${key}` };
+  if (config.cookie) return { Cookie: config.cookie };
+  return {};
+}
 
 async function api(path: string, options: RequestInit = {}) {
   const config = readConfig();
@@ -12,7 +22,7 @@ async function api(path: string, options: RequestInit = {}) {
     "Origin": BASE_URL(),
     ...(options.headers as Record<string, string> ?? {}),
   };
-  if (config.cookie) headers["Cookie"] = config.cookie;
+  Object.assign(headers, authHeaders(config));
 
   const res = await fetch(`${BASE_URL()}${path}`, { ...options, headers });
   const body = await res.json();
@@ -31,7 +41,7 @@ async function apiMultipart(path: string, formData: FormData, method = "POST") {
     "Accept": "application/json",
     "Origin": BASE_URL(),
   };
-  if (config.cookie) headers["Cookie"] = config.cookie;
+  Object.assign(headers, authHeaders(config));
 
   const res = await fetch(`${BASE_URL()}${path}`, { method, headers, body: formData });
   const body = await res.json();
@@ -52,7 +62,7 @@ async function apiSafe(path: string, options: RequestInit = {}): Promise<{ body:
     "Origin": BASE_URL(),
     ...(options.headers as Record<string, string> ?? {}),
   };
-  if (config.cookie) headers["Cookie"] = config.cookie;
+  Object.assign(headers, authHeaders(config));
 
   const res = await fetch(`${BASE_URL()}${path}`, { ...options, headers });
   const body = await res.json();
@@ -99,12 +109,41 @@ auth
   });
 
 auth
-  .command("logout")
-  .description("Sign out")
-  .action(async () => {
-    await api("/api/auth/sign-out", { method: "POST" });
+  .command("key [apiKey]")
+  .description("Use an API key instead of a session (or set WREN_API_KEY). Without an argument, reads the key from stdin.")
+  .option("--clear", "Forget the stored API key")
+  .action(async (apiKey: string | undefined, opts) => {
     const config = readConfig();
+    if (opts.clear) {
+      delete config.apiKey;
+      writeConfig(config);
+      console.log("API key removed");
+      return;
+    }
+    const key = (apiKey ?? (await Bun.stdin.text())).trim();
+    if (!key.startsWith("wren_")) {
+      console.error("Error: API keys start with wren_");
+      process.exit(1);
+    }
+    // Check the key before storing it
+    const res = await fetch(`${BASE_URL()}/api/v1/me`, { headers: { Accept: "application/json", Authorization: `Bearer ${key}` } });
+    if (!res.ok) {
+      console.error(`Error: key rejected by ${BASE_URL()} (${res.status})`);
+      process.exit(1);
+    }
+    const me = await res.json() as { org?: { slug?: string; name?: string } };
+    writeConfig({ ...config, apiKey: key });
+    console.log(`API key stored for org ${me.org?.name ?? ""} (${me.org?.slug ?? "?"}). It takes precedence over a session cookie.`);
+  });
+
+auth
+  .command("logout")
+  .description("Sign out and forget the stored API key")
+  .action(async () => {
+    const config = readConfig();
+    if (config.cookie) await apiSafe("/api/auth/sign-out", { method: "POST" });
     delete config.cookie;
+    delete config.apiKey;
     writeConfig(config);
     console.log("Signed out");
   });
@@ -498,7 +537,7 @@ program
   .action(async (collection, id, opts) => {
     const config = readConfig();
     const headers: Record<string, string> = { "Origin": BASE_URL() };
-    if (config.cookie) headers["Cookie"] = config.cookie;
+    Object.assign(headers, authHeaders(config));
     const qs = opts.version ? `?version=${opts.version}` : "";
     const res = await fetch(`${BASE_URL()}/api/v1/${collection}/${id}/raw${qs}`, { headers });
     if (!res.ok) {
@@ -808,7 +847,7 @@ program
     const path = `/api/v1/orgs/${slug}/llms.txt`;
     const config = readConfig();
     const headers: Record<string, string> = { "Origin": BASE_URL() };
-    if (config.cookie) headers["Cookie"] = config.cookie;
+    Object.assign(headers, authHeaders(config));
 
     const res = await fetch(`${BASE_URL()}${path}`, { headers });
     if (!res.ok) {
@@ -1041,7 +1080,7 @@ program
     const config = readConfig();
     const atomic = await fetch(`${BASE_URL()}/api/v1/tree/${treeName}/_promote`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json", Origin: BASE_URL(), ...(config.cookie ? { Cookie: config.cookie } : {}) },
+      headers: { "Content-Type": "application/json", Accept: "application/json", Origin: BASE_URL(), ...authHeaders(config) },
       body: JSON.stringify({ label: targetLabel, ...(fromLabel ? { from: fromLabel } : {}) }),
     });
     if (atomic.status !== 405) {
