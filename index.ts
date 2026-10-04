@@ -893,21 +893,23 @@ program
     }
     const existingByPath = new Map(existingNodes.map(n => [n.path, n]));
 
-    // Diff against existing: compare file sizes. If unchanged, skip upload.
-    // (A content-hash approach would be better but requires server changes;
-    // size is good enough for v1 and catches most real edits.)
+    // Diff against existing by SHA-256 (stored by the server on upload). Comparing
+    // sizes missed same-size edits (a changed digit or date), which were silently
+    // never deployed. Files uploaded before the server stored hashes have no
+    // sha256 and are re-uploaded once.
     let uploaded = 0;
     let skipped = 0;
     let assigned = 0;
 
     for (const relPath of localFiles) {
       const absPath = join(sourceDir, relPath);
-      const localSize = statSync(absPath).size;
       const existing = existingByPath.get(relPath);
 
-      // Check if the file is already deployed with the same size
-      const remoteSize = existing?.document?.data?.size as number | undefined;
-      if (remoteSize === localSize && existing?.documentId) {
+      const remoteHash = existing?.document?.data?.sha256 as string | undefined;
+      const localHash = remoteHash
+        ? new Bun.CryptoHasher("sha256").update(await Bun.file(absPath).arrayBuffer()).digest("hex")
+        : undefined;
+      if (remoteHash && remoteHash === localHash && existing?.documentId) {
         skipped++;
         // Still label if needed and not dry-run
         if (label && !dryRun) {
