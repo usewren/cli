@@ -77,7 +77,7 @@ function print(data: unknown) {
 program
   .name("wren")
   .description("CLI for the Wren versioned JSON storage service")
-  .version("0.1.0");
+  .version("0.5.0");
 
 // --- Config ---
 program
