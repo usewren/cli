@@ -46,7 +46,7 @@ wren promote <tree>                 Label every document in a tree
 ### Documents
 ```
 wren collections                    List all collections
-wren list <collection>              List documents (--filter, --limit, --label)
+wren list <collection>              List documents (--filter, --limit, --offset, --label)
 wren get <collection> <id>          Get a document
 wren create <collection> <json>     Create a document
 wren update <collection> <id> <json>  Update (creates new version)
@@ -59,7 +59,7 @@ wren upsert <col> <key> <json>      Create-or-update by natural key
 wren versions <collection> <id>     List version history
 wren rollback <collection> <id> <v> Roll back to version v
 wren label <collection> <id> <name> Pin a label (--version <n>)
-wren diff <collection> <id> --v1 N --v2 M
+wren diff <collection> <id> --v1 A --v2 B  Diff two versions (numbers or labels)
 ```
 
 ### Trees
@@ -100,6 +100,24 @@ wren keys list|create|revoke        API key management
 wren org current|switch             Org context
 wren invites list|send|accept|revoke  Collaborator invites
 ```
+
+## Running the tests
+
+`tests/unit` covers the config file; `tests/integration` runs every command against a
+real WREN server. The commands run in-process (see `tests/harness.ts`) so coverage
+includes `index.ts`, and `tests/setup.ts` gives them a throwaway home directory, so your
+own `~/.wren/config.json` is never touched. With Docker and the WREN sources checked out
+next to this repo (`../sandbox`, `../db`, `../auth` …), one command builds the server
+image, starts Postgres and the server on a private network, runs `bun test --coverage`
+and cleans up:
+
+```bash
+sh tests/run-local.sh                    # all tests
+sh tests/run-local.sh tests/integration/deploy.test.ts
+```
+
+Against a server you already run: `WREN_URL=http://localhost:4000 bun test --coverage`.
+Use a disposable server only — the tests create users, keys, invites and webhooks.
 
 ## License
 

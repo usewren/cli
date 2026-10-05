@@ -1,5 +1,22 @@
 # Changelog — @usewren/cli
 
+## Unreleased
+
+### Added
+- `wren list --offset <n>` pages through results together with `--limit`.
+- `wren permissions update --no-label-filter` clears a rule's label filter (the help already promised it).
+
+### Changed
+- `wren list --cursor` is gone: the list endpoint never supported cursors and ignored it. Use `--offset`.
+- Program options such as `--version` now have to come before the subcommand (`wren --version`).
+
+### Fixed
+- `wren label … --version <n>` and `wren download … --version <n>` printed the CLI version and exited 0. They now label/download that version.
+- `wren list --filter` was ignored by the server. It is now sent as `where`, so it filters (e.g. `--filter kind:odd`).
+- `wren diff --v1/--v2` with a label failed with a 400. Labels are now resolved to their version first.
+- A non-JSON response (an HTML error page, a plain-text 500) crashed the CLI with a `SyntaxError`. It now exits 1 with the status and the start of the body.
+- `wren deploy` and `wren promote` could exit 1 after a successful run when looking up the org for the public URL failed. That lookup is now best-effort.
+
 ## 0.5.0 — 2026-10-04
 
 ### Added
