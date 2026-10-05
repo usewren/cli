@@ -39,8 +39,16 @@ async function parseBody(res: Response): Promise<ParsedBody> {
 // error field, else the status and the start of the body.
 function errorMessage(res: Response, parsed: ParsedBody): string {
   if (parsed.json) {
-    const body = parsed.body as { message?: string; error?: string } | null;
-    return body?.message ?? body?.error ?? (res.statusText || `HTTP ${res.status}`);
+    const body = parsed.body as { message?: string; error?: string; details?: unknown; currentVersion?: number; collections?: unknown } | null;
+    // A failed --if-version condition: say where the document is now
+    if (res.status === 412 && typeof body?.currentVersion === "number") {
+      const now = body.currentVersion === 0 ? "the document doesn't exist" : `the document is at version ${body.currentVersion}`;
+      return `${body.error ?? "Version mismatch"}: ${now} (currentVersion: ${body.currentVersion}). Nothing was written.`;
+    }
+    const msg = body?.message ?? body?.error ?? (res.statusText || `HTTP ${res.status}`);
+    // e.g. a tree restore names the collections you can't write to
+    if (Array.isArray(body?.collections) && body.collections.length) return `${msg}: ${body.collections.join(", ")}`;
+    return msg;
   }
   const excerpt = parsed.text.replace(/\s+/g, " ").trim().slice(0, 200);
   return `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""} (not JSON): ${excerpt}`;
@@ -113,10 +121,39 @@ function print(data: unknown) {
   console.log(JSON.stringify(data, null, 2));
 }
 
+// ── Conditional and forced writes ──
+// --if-version <n> makes a write apply only while the document is still at version n
+// (sent as ?ifVersion=n; the server answers 412 otherwise). 0 = only if it doesn't
+// exist yet (create-only, by key); '*' = only if it exists.
+const IF_VERSION_HELP = "Only write if the document is still at version n (0 = only if it doesn't exist yet, '*' = only if it exists)";
+type WriteOpts = { ifVersion?: string; force?: boolean };
+
+/** The query string for --if-version/--force ("" when neither is given). */
+function writeQuery(opts: WriteOpts): string {
+  const params = new URLSearchParams();
+  if (opts.ifVersion !== undefined) {
+    if (!/^(\d+|\*)$/.test(opts.ifVersion)) {
+      console.error("Error: --if-version must be a version number, 0 (doesn't exist yet) or '*' (exists)");
+      process.exit(1);
+    }
+    params.set("ifVersion", opts.ifVersion);
+  }
+  if (opts.force) params.set("force", "true");
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+/** Print a write's result; a write that changed nothing is also called out on stderr (stdout stays JSON). */
+function printWrite(body: unknown, forceHint = true) {
+  print(body);
+  const b = body as { unchanged?: boolean; version?: number } | null;
+  if (b?.unchanged) console.error(`unchanged: same content as version ${b.version}, no new version written${forceHint ? " (--force writes one anyway)" : ""}`);
+}
+
 program
   .name("wren")
   .description("CLI for the Wren versioned JSON storage service")
-  .version("0.9.0")
+  .version("0.10.0")
   // Program options must come before the subcommand, so `wren --version` prints
   // the CLI version while `wren label … --version 1` reaches the subcommand.
   .enablePositionalOptions();
@@ -258,20 +295,31 @@ program
 
 program
   .command("update <collection> <id> <json>")
-  .description("Update a document (creates a new version)")
-  .action(async (collection, id, json) => {
-    const { body } = await api(`/api/v1/${collection}/${id}`, {
+  .description("Update a document (creates a new version unless the content is unchanged)")
+  .option("--if-version <n>", IF_VERSION_HELP)
+  .option("--force", "Write a new version even if the content is unchanged")
+  .action(async (collection, id, json, opts) => {
+    const { body } = await api(`/api/v1/${collection}/${id}${writeQuery(opts)}`, {
       method: "PUT",
       body: jsonArg(json),
     });
-    print(body);
+    printWrite(body);
   });
 
 program
   .command("delete <collection> <id>")
-  .description("Delete a document")
+  .description("Delete a document (undo with: wren undelete)")
+  .option("--if-version <n>", "Only delete if the document is still at version n")
+  .action(async (collection, id, opts) => {
+    const { body } = await api(`/api/v1/${collection}/${id}${writeQuery(opts)}`, { method: "DELETE" });
+    print(body);
+  });
+
+program
+  .command("undelete <collection> <id>")
+  .description("Bring back a deleted document as it was, with its history and labels")
   .action(async (collection, id) => {
-    const { body } = await api(`/api/v1/${collection}/${id}`, { method: "DELETE" });
+    const { body } = await api(`/api/v1/${collection}/${id}/undelete`, { method: "POST" });
     print(body);
   });
 
@@ -293,19 +341,22 @@ program
 program
   .command("upsert <collection> <keyValue> <json>")
   .description("Create or update a document by natural key (replaces list-then-put push scripts)")
-  .action(async (collection, keyValue, json) => {
-    const { body } = await api(`/api/v1/${collection}/by-key/${encodeURIComponent(keyValue)}`, {
+  .option("--if-version <n>", IF_VERSION_HELP)
+  .option("--force", "Write a new version even if the content is unchanged")
+  .action(async (collection, keyValue, json, opts) => {
+    const { body } = await api(`/api/v1/${collection}/by-key/${encodeURIComponent(keyValue)}${writeQuery(opts)}`, {
       method: "PUT",
-      body: json,
+      body: jsonArg(json),
     });
-    print(body);
+    printWrite(body);
   });
 
 program
   .command("delete-by-key <collection> <keyValue>")
   .description("Delete a document by its natural key")
-  .action(async (collection, keyValue) => {
-    const { body } = await api(`/api/v1/${collection}/by-key/${encodeURIComponent(keyValue)}`, {
+  .option("--if-version <n>", "Only delete if the document is still at version n")
+  .action(async (collection, keyValue, opts) => {
+    const { body } = await api(`/api/v1/${collection}/by-key/${encodeURIComponent(keyValue)}${writeQuery(opts)}`, {
       method: "DELETE",
     });
     print(body);
@@ -336,9 +387,12 @@ program
     print(body);
   });
 
-program
+// `wren label <collection> <id> <label>` sets a label; `wren label remove …` is a
+// subcommand of it, so the existing form keeps working. (A collection literally
+// named "remove" can't be labeled through the CLI.)
+const label = program
   .command("label <collection> <id> <label>")
-  .description("Set a label on the current version (or a specific version with --version)")
+  .description("Set a label on the current version (or a specific version with --version); 'label remove' removes one")
   .option("-v, --version <n>", "Version number to label", parseInt)
   .action(async (collection, id, label, opts) => {
     const payload: Record<string, unknown> = { label };
@@ -350,29 +404,55 @@ program
     print(body);
   });
 
+label
+  .command("remove <collection> <id> <label>")
+  .description("Remove a label from a document (the version it pointed at stays)")
+  .action(async (collection, id, name) => {
+    const { body } = await api(`/api/v1/${collection}/${id}/labels/${encodeURIComponent(name)}`, { method: "DELETE" });
+    print(body);
+  });
+
 program
   .command("diff <collection> <id>")
   .description("Diff between two versions or labels")
   .requiredOption("--v1 <v1>", "First version or label")
   .requiredOption("--v2 <v2>", "Second version or label")
+  .option("--deep", "Report changes inside nested objects and arrays, not only changed top-level fields")
   .action(async (collection, id, opts) => {
-    const v1 = await resolveVersion(collection, id, opts.v1);
-    const v2 = await resolveVersion(collection, id, opts.v2);
-    const { body } = await api(`/api/v1/${collection}/${id}/diff?v1=${v1}&v2=${v2}`);
+    // The server resolves labels itself (404 for a label the document doesn't have)
+    const params = new URLSearchParams({ v1: opts.v1, v2: opts.v2 });
+    if (opts.deep) params.set("deep", "true");
+    const { body } = await api(`/api/v1/${collection}/${id}/diff?${params}`);
     print(body);
   });
 
-// The diff endpoint only takes version numbers, so a label is resolved to the
-// version it points at first.
-async function resolveVersion(collection: string, id: string, ref: string): Promise<number> {
-  if (/^\d+$/.test(ref)) return Number(ref);
-  const found = await apiSafe(`/api/v1/${collection}/${id}?label=${encodeURIComponent(ref)}`);
-  if (!found) {
-    console.error(`Error: no version of ${collection}/${id} has the label "${ref}"`);
-    process.exit(1);
-  }
-  return (found.body as { version: number }).version;
-}
+// ── Restore ──
+// Puts every document of a collection (or of a tree) back to the version a label
+// points at, in one transaction: changed documents get a new version with the
+// labeled content and deleted ones come back.
+program
+  .command("restore [collection]")
+  .description("Restore a whole collection (or a tree with --tree) to a label, in one transaction")
+  .requiredOption("-l, --label <label>", "Label to restore to")
+  .option("-t, --tree <name>", "Restore every document in this tree instead (needs write access to all their collections)")
+  .option("--delete-unlabeled", "Also delete documents that don't carry the label (e.g. created since)")
+  .option("--json", "Print the raw JSON response")
+  .action(async (collection: string | undefined, opts) => {
+    if (!collection === !opts.tree) {
+      console.error("Error: give a collection or --tree <name> (not both)");
+      process.exit(1);
+    }
+    const path = opts.tree ? `/api/v1/tree/${encodeURIComponent(opts.tree)}/_restore` : `/api/v1/${collection}/_restore`;
+    const { body } = await api(path, {
+      method: "POST",
+      body: JSON.stringify({ label: opts.label, ...(opts.deleteUnlabeled ? { deleteUnlabeled: true } : {}) }),
+    });
+    if (opts.json) { print(body); return; }
+    const r = body as { label: string; restored: number; undeleted: number; deleted: number; unchanged: number; collections: string[] };
+    const scope = opts.tree ? `tree "${opts.tree}"` : collection;
+    console.log(`Restored ${scope} to label "${r.label}": ${r.restored} restored, ${r.undeleted} undeleted, ${r.deleted} deleted, ${r.unchanged} unchanged`);
+    if (r.collections.length) console.log(`Collections changed: ${r.collections.join(", ")}`);
+  });
 
 // --- Schema ---
 const schema = program.command("schema").description("Collection JSON Schema management");
@@ -409,6 +489,50 @@ schema
 
     const { body } = await api(`/api/v1/${collection}/_schema`, {
       method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    print(body);
+  });
+
+// PATCH changes only the fields given; everything else stays as it is (`set` replaces
+// the whole definition, so it drops a naturalKey or index someone added later).
+schema
+  .command("patch <collection> [json]")
+  .description("Change only the given fields of a collection's schema definition; --no-<field> clears one")
+  .option("--display-name <template>", "Display name template, e.g. \"{title}\"")
+  .option("--no-display-name", "Clear the display name")
+  .option("--list-columns <fields>", "Comma-separated fields to show as columns in the document list")
+  .option("--no-list-columns", "Clear the list columns")
+  .option("--natural-key <field>", "Top-level field used as the document's natural key (e.g. \"slug\")")
+  .option("--no-natural-key", "Clear the natural key")
+  .option("--type <type>", "Collection type: json or binary")
+  .option("--indexes <json>", "Query indexes as JSON, e.g. '[{\"path\":\"sku\",\"kind\":\"btree\"}]'")
+  .option("--no-indexes", "Remove all query indexes")
+  .option("--no-schema", "Clear the JSON Schema (accept any document)")
+  .action(async (collection, json, opts) => {
+    const payload: Record<string, unknown> = {};
+    if (json !== undefined) {
+      try { payload.schema = JSON.parse(json); } catch { console.error("Error: invalid JSON"); process.exit(1); }
+    }
+    // Commander gives false for --no-<field>, which the server takes as null (clear)
+    if (opts.schema === false) {
+      if (json !== undefined) { console.error("Error: give a schema or --no-schema, not both"); process.exit(1); }
+      payload.schema = null;
+    }
+    if (opts.displayName !== undefined) payload.displayName = opts.displayName || null;
+    if (opts.listColumns !== undefined) payload.listColumns = opts.listColumns ? opts.listColumns.split(",").map((c: string) => c.trim()).filter(Boolean) : null;
+    if (opts.naturalKey !== undefined) payload.naturalKey = opts.naturalKey || null;
+    if (opts.type !== undefined) payload.collectionType = opts.type;
+    if (opts.indexes !== undefined) {
+      if (opts.indexes === false) payload.indexes = [];
+      else { try { payload.indexes = JSON.parse(opts.indexes); } catch { console.error("Error: invalid JSON in --indexes"); process.exit(1); } }
+    }
+    if (Object.keys(payload).length === 0) {
+      console.error("Error: nothing to change; give a schema or at least one option (see --help)");
+      process.exit(1);
+    }
+    const { body } = await api(`/api/v1/${collection}/_schema`, {
+      method: "PATCH",
       body: JSON.stringify(payload),
     });
     print(body);
@@ -556,47 +680,59 @@ tree
   });
 
 // --- Binary assets ---
+/** A multipart form with the file at filePath in its "file" field; exits if the file is missing. */
+async function fileForm(filePath: string): Promise<{ form: FormData; filename: string }> {
+  const fileHandle = Bun.file(filePath);
+  const exists = await fileHandle.exists();
+  if (!exists) { console.error(`Error: file not found: ${filePath}`); process.exit(1); }
+  const blob = await fileHandle.arrayBuffer();
+  const filename = filePath.split(/[\\/]/).pop()!;
+  const form = new FormData();
+  form.append("file", new File([blob], filename, { type: fileHandle.type || "application/octet-stream" }));
+  return { form, filename };
+}
+
 program
   .command("upload <collection> <file>")
-  .description("Upload a binary asset to a collection (creates a new document)")
-  .action(async (collection, filePath) => {
-    const fileHandle = Bun.file(filePath);
-    const exists = await fileHandle.exists();
-    if (!exists) { console.error(`Error: file not found: ${filePath}`); process.exit(1); }
-    const blob = await fileHandle.arrayBuffer();
-    const filename = filePath.split("/").pop()!;
-    const form = new FormData();
-    form.append("file", new File([blob], filename, { type: fileHandle.type || "application/octet-stream" }));
-    const { body } = await apiMultipart(`/api/v1/${collection}`, form, "POST");
-    print(body);
+  .description("Upload a binary asset to a collection (creates a new document, or with --key creates or replaces the file of that name)")
+  .option("--key [name]", "Store by name (PUT by-key; the collection needs naturalKey \"filename\"); the name defaults to the file's")
+  .option("--if-version <n>", `With --key: ${IF_VERSION_HELP}`)
+  .action(async (collection, filePath, opts) => {
+    const { form, filename } = await fileForm(filePath);
+    if (opts.key === undefined) {
+      if (opts.ifVersion !== undefined) { console.error("Error: --if-version needs --key (or use upload-version)"); process.exit(1); }
+      const { body } = await apiMultipart(`/api/v1/${collection}`, form, "POST");
+      printWrite(body, false);
+      return;
+    }
+    const name = opts.key === true ? filename : opts.key;
+    const { body } = await apiMultipart(`/api/v1/${collection}/by-key/${encodeURIComponent(name)}${writeQuery(opts)}`, form, "PUT");
+    printWrite(body, false);
   });
 
 program
   .command("upload-version <collection> <id> <file>")
   .description("Upload a new version of an existing binary asset")
-  .action(async (collection, id, filePath) => {
-    const fileHandle = Bun.file(filePath);
-    const exists = await fileHandle.exists();
-    if (!exists) { console.error(`Error: file not found: ${filePath}`); process.exit(1); }
-    const blob = await fileHandle.arrayBuffer();
-    const filename = filePath.split("/").pop()!;
-    const form = new FormData();
-    form.append("file", new File([blob], filename, { type: fileHandle.type || "application/octet-stream" }));
-    const { body } = await apiMultipart(`/api/v1/${collection}/${id}`, form, "PUT");
-    print(body);
+  .option("--if-version <n>", IF_VERSION_HELP)
+  .action(async (collection, id, filePath, opts) => {
+    const { form } = await fileForm(filePath);
+    const { body } = await apiMultipart(`/api/v1/${collection}/${id}${writeQuery(opts)}`, form, "PUT");
+    printWrite(body, false);
   });
 
 program
   .command("download <collection> <id>")
-  .description("Download the raw binary for an asset document")
+  .description("Download the raw binary for an asset document (or by file name with --key)")
   .option("--version <n>", "Download a specific version")
+  .option("--key", "<id> is a file name (the collection's naturalKey \"filename\")")
   .option("--out <path>", "Write to file instead of stdout")
   .action(async (collection, id, opts) => {
     const config = readConfig();
     const headers: Record<string, string> = { "Origin": BASE_URL() };
     Object.assign(headers, authHeaders(config));
     const qs = opts.version ? `?version=${opts.version}` : "";
-    const res = await fetch(`${BASE_URL()}/api/v1/${collection}/${id}/raw${qs}`, { headers });
+    const doc = opts.key ? `by-key/${encodeURIComponent(id)}` : id;
+    const res = await fetch(`${BASE_URL()}/api/v1/${collection}/${doc}/raw${qs}`, { headers });
     if (!res.ok) {
       console.error(`Error: ${errorMessage(res, await parseBody(res))}`);
       process.exit(1);
@@ -1034,9 +1170,19 @@ program
 
       let docId: string;
       if (existing?.documentId) {
-        // Update existing document (new version)
+        // Update existing document (new version). The server makes no version when
+        // the bytes, name and type equal the current ones (e.g. a file uploaded
+        // before hashes were stored): count that as unchanged, not uploaded.
         const { body } = await apiMultipart(`/api/v1/${collectionName}/${existing.documentId}`, form, "PUT");
-        docId = (body as { id: string }).id;
+        const written = body as { id: string; unchanged?: boolean };
+        docId = written.id;
+        if (written.unchanged) {
+          skipped++;
+          if (label) {
+            await api(`/api/v1/${collectionName}/${docId}/labels`, { method: "POST", body: JSON.stringify({ label }) });
+          }
+          continue;
+        }
       } else {
         // Create new document
         const { body } = await apiMultipart(`/api/v1/${collectionName}`, form, "POST");
