@@ -1,5 +1,26 @@
 # Changelog — @usewren/cli
 
+## 0.10.0 — Unreleased
+
+### Added
+- **Conditional writes:** `--if-version <n>` on `update`, `delete`, `upsert`, `delete-by-key`, `upload-version` and `upload --key` (sent as `?ifVersion=n`). The write applies only while the document is at version n; `0` = only if it doesn't exist yet (create-only), `'*'` = only if it exists. On a mismatch (412) the CLI prints the document's current version and exits 1.
+- `wren update --force` and `wren upsert --force` write a new version even if the content is unchanged. A write that changed nothing (`"unchanged": true` in the JSON) is also reported on stderr, so stdout stays JSON.
+- `wren restore <collection> --label <name> [--delete-unlabeled]` and `wren restore --tree <name> --label <name>` put every document back to the labeled version in one transaction and print how many were restored, undeleted, deleted and unchanged (`--json` for the raw result). A tree restore without write access to all its collections names them.
+- `wren undelete <collection> <id>` brings a deleted document back.
+- `wren label remove <collection> <id> <label>` removes a label. It is a subcommand of `label`, so `wren label <collection> <id> <label>` keeps working.
+- `wren diff --deep` reports changes inside nested objects and arrays.
+- `wren schema patch <collection> [json]` changes only the given fields (`--display-name`, `--list-columns`, `--natural-key`, `--type`, `--indexes`) and clears with `--no-display-name`, `--no-list-columns`, `--no-natural-key`, `--no-indexes`, `--no-schema`.
+- Files by name: `wren upload <collection> <file> --key [name]` creates or replaces the file of that name (collections with `naturalKey: "filename"`); `wren download <collection> <name> --key` downloads it.
+
+### Changed
+- Version is now 0.10.0 (`wren --version`, package.json), matching the server release whose features it calls.
+- `wren diff` sends labels to the server, which resolves them, instead of looking each one up first. An unknown label now fails with the server's "No such label on this document". Needs server 0.9 or later.
+- `wren deploy` counts a re-upload the server answers with `"unchanged": true` as unchanged rather than uploaded.
+- `wren upsert` checks its JSON before sending it, like `create` and `update`.
+
+### Fixed
+- `wren upload` and `upload-version` named a file uploaded from a Windows path (`C:\site\a.txt`) by the whole path; they now use the file name.
+
 ## 0.9.0 — Unreleased
 
 ### Added

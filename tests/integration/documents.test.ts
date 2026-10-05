@@ -154,10 +154,10 @@ describe("versions, labels, diff", () => {
     expect(d.diff.length).toBeGreaterThan(0);
   });
 
-  it("diff with an unknown label exits 1", async () => {
+  it("diff with an unknown label exits 1 (the server resolves labels)", async () => {
     const r = await u.run("diff", col, id, "--v1", "nope", "--v2", "2");
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain(`no version of ${col}/${id} has the label "nope"`);
+    expect(r.stderr).toContain("Error: No such label on this document");
   });
 
   it("rollback restores an old version as a new one", async () => {

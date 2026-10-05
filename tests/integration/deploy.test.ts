@@ -66,6 +66,33 @@ describe("deploy", () => {
     expect(raw.text).toBe("version 2");
   });
 
+  it("counts an upload the server answers with unchanged: true as unchanged", async () => {
+    const tree = `site-${uid()}`;
+    const dir = makeSite({ "index.html": "same bytes" });
+    await u.run("deploy", dir, "--tree", tree);
+
+    // Hide the stored hash, as for a file uploaded before the server stored hashes:
+    // deploy re-uploads it, and the server answers that nothing changed.
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const res = await realFetch(input, init);
+      if (!String(input).includes(`/tree/${tree}?full=true`)) return res;
+      const body = await res.json() as { nodes: { document: { data: Record<string, unknown> } }[] };
+      for (const n of body.nodes) delete n.document.data.sha256;
+      return Response.json(body);
+    }) as typeof fetch;
+    let r;
+    try {
+      r = await u.run("deploy", dir, "--tree", tree, "--label", "again");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(`Deployed to tree "${tree}":  0 uploaded, 1 unchanged, 0 new paths`);
+    const node = await u.api("GET", `/tree/${tree}/index.html?label=again`);
+    expect(node.document.version).toBe(1);
+  });
+
   it("--dry-run reports without changing anything", async () => {
     const tree = `site-${uid()}`;
     const dir = makeSite({ "index.html": "a", "b.html": "b" });
