@@ -1257,6 +1257,141 @@ materialized
     print(body);
   });
 
+// ── Retention ───────────────────────────────────────────────────────────────
+// Policies that remove old versions. "*" is the org default; a collection's own
+// policy replaces it. Current and labeled versions are always kept.
+
+type RetentionRules = { labeledOnly: boolean; maxVersions: number | null; maxAgeDays: number | null; afterLabel: string | null };
+type RetentionPolicy = RetentionRules & { collection: string; updatedAt: string; updatedBy: string | null };
+type RetentionResult = { collections: { collection: string; versions: number; documents: number; bytes: number }[]; total: { versions: number; documents: number; bytes: number } };
+
+const ALWAYS_KEPT = "Current versions and labeled versions are always kept.";
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const megabytes = (bytes: number) => `${bytes > 0 && bytes < 10_486 ? "<0.01" : (bytes / 1_048_576).toFixed(2)} MB`;
+const targetName = (t: string) => t === "*" ? "the org default" : t;
+const retentionPath = (t: string) => `/api/v1/retention/${encodeURIComponent(t)}`;
+
+function describeRules(p: RetentionRules): string {
+  const rules = [
+    p.labeledOnly ? "keep only labeled versions" : "",
+    p.maxVersions != null ? `keep the newest ${p.maxVersions} versions` : "",
+    p.maxAgeDays != null ? `remove versions older than ${plural(p.maxAgeDays, "day")}` : "",
+    p.afterLabel ? `remove versions older than the version labeled "${p.afterLabel}"` : "",
+  ].filter(Boolean);
+  return rules.length ? rules.join("; ") : "keep everything (exempt)";
+}
+
+/** The rules given by --labeled-only/--max-versions/--max-age-days/--after-label/--keep-all, or null when none was given. */
+function rulesFromOptions(opts: { labeledOnly?: boolean; maxVersions?: string; maxAgeDays?: string; afterLabel?: string; keepAll?: boolean }): RetentionRules | null {
+  const whole = (flag: string, v: string | undefined) => {
+    if (v === undefined) return null;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 1) { console.error(`Error: ${flag} must be a whole number of at least 1`); process.exit(1); }
+    return n;
+  };
+  const rules: RetentionRules = {
+    labeledOnly: !!opts.labeledOnly,
+    maxVersions: whole("--max-versions", opts.maxVersions),
+    maxAgeDays: whole("--max-age-days", opts.maxAgeDays),
+    afterLabel: opts.afterLabel?.trim() || null,
+  };
+  const hasRule = rules.labeledOnly || rules.maxVersions != null || rules.maxAgeDays != null || rules.afterLabel != null;
+  if (opts.keepAll && hasRule) { console.error("Error: --keep-all can't be combined with a rule"); process.exit(1); }
+  return hasRule || opts.keepAll ? rules : null;
+}
+
+function printResult(r: RetentionResult, verb: "Would remove" | "Removed") {
+  if (r.total.versions === 0) {
+    console.log(verb === "Removed" ? "Nothing to remove." : "Nothing would be removed.");
+    return;
+  }
+  console.log(`${verb} ${plural(r.total.versions, "version")} in ${plural(r.total.documents, "document")}, freeing ${megabytes(r.total.bytes)}.`);
+  if (r.collections.length > 1) {
+    for (const c of r.collections) console.log(`  ${c.collection}  ${plural(c.versions, "version")} in ${plural(c.documents, "document")}, ${megabytes(c.bytes)}`);
+  }
+}
+
+const ruleOptions = (cmd: ReturnType<typeof program.command>) => cmd
+  .option("--labeled-only", "Keep only labeled versions")
+  .option("--max-versions <n>", "Keep the newest n versions (the current one counts)")
+  .option("--max-age-days <n>", "Remove versions older than n days")
+  .option("--after-label <label>", "Remove versions older than the version this label points to")
+  .option("--keep-all", "No rule: keep everything (exempts a collection from the org default)");
+
+const retention = program.command("retention").description(`Version retention policies (org owner or admin). ${ALWAYS_KEPT}`);
+
+retention
+  .command("get")
+  .description("Show the org default, each collection's policy and the recent runs")
+  .option("--json", "Print the raw JSON")
+  .action(async (opts) => {
+    const { body } = await api("/api/v1/retention");
+    if (opts.json) { print(body); return; }
+    const r = body as { default: RetentionPolicy | null; collections: RetentionPolicy[]; runs: { collection: string; versionsRemoved: number; bytesFreed: number; triggeredBy: string | null; ranAt: string }[] };
+    console.log(`Org default: ${r.default ? describeRules(r.default) : "none (every version is kept)"}`);
+    if (r.collections.length === 0) console.log("Collections: none with a policy of their own");
+    else {
+      console.log("Collections:");
+      const width = Math.max(...r.collections.map(c => c.collection.length));
+      for (const c of r.collections) console.log(`  ${c.collection.padEnd(width)}  ${describeRules(c)}`);
+    }
+    if (r.runs.length) {
+      const me = await apiSafe("/api/v1/me");
+      const myId = (me?.body as { user?: { id?: string } } | undefined)?.user?.id;
+      console.log("Recent runs:");
+      for (const run of r.runs) {
+        const by = run.triggeredBy === "schedule" ? "hourly schedule" : run.triggeredBy === myId ? "you" : `user ${run.triggeredBy}`;
+        console.log(`  ${new Date(run.ranAt).toISOString().slice(0, 16).replace("T", " ")}  ${run.collection}  ${plural(run.versionsRemoved, "version")} removed, ${megabytes(run.bytesFreed)} freed  (${by})`);
+      }
+    }
+    console.log(ALWAYS_KEPT);
+  });
+
+ruleOptions(retention
+  .command("set <collection>")
+  .description("Set the retention policy of a collection, or '*' (quoted) for the org default; rules combine (a version goes if any rule says so)"))
+  .action(async (target, opts) => {
+    const rules = rulesFromOptions(opts);
+    if (!rules) { console.error("Error: give at least one rule, or --keep-all to keep everything"); process.exit(1); }
+    const { body } = await api(retentionPath(target), { method: "PUT", body: JSON.stringify(rules) });
+    console.log(`Policy for ${targetName(target)}: ${describeRules(body as RetentionPolicy)}`);
+    console.log(`${ALWAYS_KEPT} Preview with: wren retention preview ${target === "*" ? "'*'" : target}`);
+  });
+
+ruleOptions(retention
+  .command("preview <collection>")
+  .description("Show what the saved policy (or the one given by the flags) would remove; changes nothing"))
+  .action(async (target, opts) => {
+    const rules = rulesFromOptions(opts);
+    const { body } = await api(`${retentionPath(target)}/_preview`, { method: "POST", ...(rules ? { body: JSON.stringify(rules) } : {}) });
+    printResult(body as RetentionResult, "Would remove");
+    console.log("Nothing has been changed.");
+  });
+
+retention
+  .command("remove <collection>")
+  .description("Remove the policy of a collection (it falls back to the org default), or '*' for the default")
+  .action(async (target) => {
+    await api(retentionPath(target), { method: "DELETE" });
+    console.log(`Removed the retention policy for ${targetName(target)}`);
+  });
+
+retention
+  .command("apply")
+  .description("Apply all retention policies now (they also run hourly)")
+  .option("-y, --yes", "Don't ask for confirmation")
+  .action(async (opts) => {
+    if (!opts.yes) {
+      const answer = prompt("Remove the versions your retention policies match now? This can't be undone. [y/N]");
+      if (!/^y(es)?$/i.test(answer?.trim() ?? "")) {
+        console.error("Cancelled (use --yes to skip this question).");
+        process.exit(1);
+      }
+    }
+    const { body } = await api("/api/v1/retention/_apply", { method: "POST" });
+    printResult(body as RetentionResult, "Removed");
+  });
+
 // ── Webhooks ────────────────────────────────────────────────────────────────
 
 const webhooks = program.command("webhooks").description("Webhook management");
