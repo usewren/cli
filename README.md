@@ -78,6 +78,19 @@ wren upload-version <col> <id> <file>  New version of existing asset
 wren download <collection> <id>     Download raw binary (--out <path>)
 ```
 
+Uploading a file whose bytes, name and type equal the current version creates no new version: the server answers with `"unchanged": true`, and identical bytes are stored once.
+
+### Retention
+```
+wren retention get                  Org default, collection policies, recent runs
+wren retention set <col|'*'> …      --labeled-only --max-versions n --max-age-days n --after-label name, or --keep-all
+wren retention preview <col|'*'>    What the saved policy (or the flags) would remove; changes nothing
+wren retention remove <col|'*'>     Remove a policy ('*' = the org default)
+wren retention apply [--yes]        Remove now (also runs hourly); asks first
+```
+
+A version is removed if any rule says so; a document's current version and every labeled version are always kept. Quote `'*'` so the shell doesn't expand it.
+
 ### Auth & config
 ```
 wren config --url <url>             Set server URL (or WREN_URL)
