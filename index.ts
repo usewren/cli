@@ -116,7 +116,7 @@ function print(data: unknown) {
 program
   .name("wren")
   .description("CLI for the Wren versioned JSON storage service")
-  .version("0.5.0")
+  .version("0.9.0")
   // Program options must come before the subcommand, so `wren --version` prints
   // the CLI version while `wren label … --version 1` reaches the subcommand.
   .enablePositionalOptions();

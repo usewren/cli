@@ -43,11 +43,11 @@ describe("wren cli", () => {
 
   it("shows version", async () => {
     const { stdout } = await wrenProcess(["--version"]);
-    expect(stdout.trim()).toBe("0.5.0");
+    expect(stdout.trim()).toBe("0.9.0");
   });
 
   it("help and version also work in-process", async () => {
-    expect((await run(["--version"])).stdout.trim()).toBe("0.5.0");
+    expect((await run(["--version"])).stdout.trim()).toBe("0.9.0");
     const help = await run(["--help"]);
     expect(help.code).toBe(0);
     expect(help.stdout).toContain("Usage: wren");
