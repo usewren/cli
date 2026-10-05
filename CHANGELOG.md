@@ -1,6 +1,6 @@
 # Changelog — @usewren/cli
 
-## Unreleased
+## 0.9.0 — Unreleased
 
 ### Added
 - `wren retention get|set|preview|remove|apply` manages version retention policies (org owners and admins): `set <collection|'*'>` with `--labeled-only`, `--max-versions <n>`, `--max-age-days <n>`, `--after-label <name>` or `--keep-all` (exempts a collection from the org default); `preview` shows what the saved policy, or the one given by the flags, would remove without changing anything; `apply` removes it now and asks first unless `--yes`. Sizes are shown in MB. Current and labeled versions are always kept. Needs a server with retention support.
@@ -8,6 +8,7 @@
 - `wren permissions update --no-label-filter` clears a rule's label filter (the help already promised it).
 
 ### Changed
+- Version is now 0.9.0 (`wren --version`, package.json), matching the server release whose features (such as retention) it calls; it said 0.5.0.
 - `wren list --cursor` is gone: the list endpoint never supported cursors and ignored it. Use `--offset`.
 - Program options such as `--version` now have to come before the subcommand (`wren --version`).
 
