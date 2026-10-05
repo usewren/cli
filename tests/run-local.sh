@@ -20,7 +20,7 @@ IMG="wren:$NAME"
 hostpath() { case "$1" in /[a-zA-Z]/*) echo "$(echo "$1" | cut -c2 | tr a-z A-Z):$(echo "$1" | cut -c3-)";; *) echo "$1";; esac; }
 
 cleanup() {
-  docker rm -f "$NAME-app" "$NAME-db" >/dev/null 2>&1 || true
+  docker rm -fv "$NAME-app" "$NAME-db" >/dev/null 2>&1 || true
   docker network rm "$NAME-net" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
