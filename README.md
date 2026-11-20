@@ -50,8 +50,24 @@ wren list <collection>              List documents (--filter, --limit, --offset,
 wren get <collection> <id>          Get a document
 wren create <collection> <json>     Create a document
 wren update <collection> <id> <json>  Update (creates new version)
-wren delete <collection> <id>       Soft delete
-wren upsert <col> <key> <json>      Create-or-update by natural key
+  --if-version <n>                  Only if still at version n (412 otherwise)
+  --force                           New version even if the content is unchanged
+wren delete <collection> <id>       Soft delete (--if-version <n>)
+wren undelete <collection> <id>     Bring a deleted document back
+wren upsert <col> <key> <json>      Create-or-update by natural key (--if-version, --force)
+wren delete-by-key <col> <key>      Delete by natural key (--if-version <n>)
+```
+
+A write whose content equals the current version creates no version: the JSON result
+carries `"unchanged": true` and the CLI says so on stderr. `--force` writes one anyway.
+
+`--if-version <n>` makes a write conditional, so two writers can't silently overwrite
+each other: it applies only while the document is at version n (a read's `version`).
+`0` means "only if it doesn't exist yet" (create-only, for `upsert` and `upload --key`),
+`'*'` means "only if it exists". On a mismatch nothing is written and the CLI exits 1:
+
+```
+Error: Version mismatch: the document is at version 3 (currentVersion: 3). Nothing was written.
 ```
 
 ### Versions & labels
@@ -59,8 +75,34 @@ wren upsert <col> <key> <json>      Create-or-update by natural key
 wren versions <collection> <id>     List version history
 wren rollback <collection> <id> <v> Roll back to version v
 wren label <collection> <id> <name> Pin a label (--version <n>)
+wren label remove <col> <id> <name> Remove a label
 wren diff <collection> <id> --v1 A --v2 B  Diff two versions (numbers or labels)
+  --deep                            Report changes inside nested objects and arrays
+wren restore <collection> --label <name>   Put every document back to the labeled version
+  --delete-unlabeled                Also delete documents without the label
+  --json                            Print the raw result
+wren restore --tree <name> --label <name>  Same for every document in a tree
 ```
+
+`restore` runs in one transaction: changed documents get a new version with the labeled
+content, deleted ones come back, and it prints how many were restored, undeleted,
+deleted and unchanged. Restoring a tree needs write access to every collection in it.
+`label remove` is a subcommand of `label`, so a collection literally named `remove`
+can't be labeled through the CLI.
+
+### Schema
+```
+wren schema get <collection>        Show the schema definition
+wren schema set <col> [json]        Replace it (--display-name, --list-columns, --natural-key, --type)
+wren schema patch <col> [json]      Change only the given fields; everything else stays
+  --display-name, --list-columns, --natural-key, --type, --indexes <json>
+  --no-display-name, --no-list-columns, --no-natural-key, --no-indexes, --no-schema   clear one
+wren schema validate <col> [json]   Dry-run the current or a proposed schema
+wren schema delete <collection>     Remove the schema
+```
+
+Prefer `patch` in scripts: `set` replaces the whole definition and drops a natural key
+or index someone added since.
 
 ### Trees
 ```
@@ -74,9 +116,16 @@ wren tree remove <name> <path>      Unassign
 ### Binary assets
 ```
 wren upload <collection> <file>     Upload a binary asset
-wren upload-version <col> <id> <file>  New version of existing asset
-wren download <collection> <id>     Download raw binary (--out <path>)
+  --key [name]                      Create or replace the file of that name (default: the file's)
+  --if-version <n>                  With --key: only if still at version n (0 = create-only)
+wren upload-version <col> <id> <file>  New version of existing asset (--if-version <n>)
+wren download <collection> <id>     Download raw binary (--out <path>, --version <n>)
+  --key                             <id> is a file name
 ```
+
+Files by name need a collection with `naturalKey: "filename"`:
+`wren schema patch files --type binary --natural-key filename`, then
+`wren upload files ./logo.svg --key` and `wren download files logo.svg --key`.
 
 Uploading a file whose bytes, name and type equal the current version creates no new version: the server answers with `"unchanged": true`, and identical bytes are stored once.
 

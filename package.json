@@ -1,6 +1,6 @@
 {
   "name": "@usewren/cli",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "CLI for WREN — deploy static sites, manage versioned JSON documents, and control trees",
   "type": "module",
   "bin": {
